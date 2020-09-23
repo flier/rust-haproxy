@@ -1,0 +1,13 @@
+[package]
+name = "haproxy-spoa"
+version = "0.1.0"
+authors = ["Flier Lu <flier.lu@gmail.com>"]
+edition = "2018"
+description = """
+Stream Processing Offload Agent.
+
+A SPOA is a service that will receive info from a SPOE to offload the stream processing.
+An agent manages several servers. It uses a backend to reference all of them.
+By extension, these servers can also be called agents.
+"""
+[dependencies]

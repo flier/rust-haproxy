@@ -1,0 +1,14 @@
+[package]
+name = "haproxy-spop"
+version = "0.1.0"
+authors = ["Flier Lu <flier.lu@gmail.com>"]
+edition = "2018"
+description = """
+Stream Processing Offload Protocol, used by SPOEs to talk to SPOA servers.
+
+This protocol is used by engines to talk to agents.
+"""
+
+[dependencies]
+bytes = "0.5"
+combine = "4.3"

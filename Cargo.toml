@@ -1,0 +1,8 @@
+[workspace]
+
+members = [
+    "haproxy",
+    "spoa",
+    "spoe",
+    "spop",
+]
