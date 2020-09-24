@@ -4,6 +4,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 use combine::{
+    any, count_min_max,
     error::{ParseError, StreamError},
     from_str, many1,
     parser::{
@@ -287,10 +288,13 @@ where
     Input::Range: Range + AsRef<[u8]>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    string().map(|name| Message {
-        name,
-        args: HashMap::new(),
-    })
+    (
+        string(),
+        any().then(|nb| {
+            count_min_max::<HashMap<_, _>, _, _>(nb as usize, nb as usize, (string(), data()))
+        }),
+    )
+        .map(|(name, args)| Message { name, args })
 }
 
 pub fn agent_ack<Input>(metadata: &Metadata) -> impl Parser<Input, Output = agent::Ack>
@@ -405,9 +409,7 @@ where
         byte(SPOE_DATA_T_INT64)
             .with(varint())
             .map(|n| Data::Int64(n as i64)),
-        byte(SPOE_DATA_T_UINT64)
-            .with(varint())
-            .map(|n| Data::Uint64(n)),
+        byte(SPOE_DATA_T_UINT64).with(varint()).map(Data::Uint64),
         byte(SPOE_DATA_T_IPV4)
             .with(take(IPV4_ADDR_LEN))
             .and_then(|b: Input::Range| {
@@ -467,7 +469,8 @@ where
 mod tests {
     use lazy_static::lazy_static;
 
-    use super::{Data::*, *};
+    use super::*;
+    use crate::{data::BufMutExt, Data::*};
 
     lazy_static! {
         static ref TEST_DATA: Vec<(Data, &'static [u8])> = [
@@ -516,7 +519,7 @@ mod tests {
             assert_eq!(size_of(d), b.len());
 
             let mut v = Vec::new();
-            v.put_data(&d);
+            v.put_data(d.clone());
             assert_eq!(v.as_slice(), *b, "encode data: {:?}", d);
 
             let (r, s) = Data::parse(b).unwrap();

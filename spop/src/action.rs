@@ -1,4 +1,4 @@
-use crate::Data;
+use crate::{data::BufMutExt as _, Data};
 
 pub const SPOE_ACT_T_SET_VAR: u8 = 1;
 pub const SPOE_ACT_T_UNSET_VAR: u8 = 2;
@@ -30,4 +30,27 @@ pub enum Action {
         scope: Scope,
         name: String,
     },
+}
+
+pub trait BufMutExt {
+    fn put_action(&mut self, action: Action);
+}
+
+impl<T> BufMutExt for T
+where
+    T: bytes::BufMut,
+{
+    fn put_action(&mut self, action: Action) {
+        match action {
+            Action::SetVar { scope, name, value } => {
+                self.put_slice(&[SPOE_ACT_T_SET_VAR, 3, scope as u8]);
+                self.put_str(name);
+                self.put_data(value);
+            }
+            Action::UnsetVar { scope, name } => {
+                self.put_slice(&[SPOE_ACT_T_UNSET_VAR, 2, scope as u8]);
+                self.put_str(name);
+            }
+        }
+    }
 }

@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use bitflags::bitflags;
+use derive_more::Display;
 
-use crate::Data;
+use crate::{action::BufMutExt as _, data::BufMutExt as _, varint::BufMutExt as _, Data};
 
 pub const SPOE_FRM_T_UNSET: u8 = 0;
 
@@ -31,13 +32,14 @@ pub const MSG_KEY: &str = "message";
 
 bitflags! {
     /// Flags set on the SPOE frame
+    #[derive(Default)]
     pub struct Flags: u32 {
         const FIN = SPOE_FRM_FL_FIN;
         const ABORT = SPOE_FRM_FL_ABRT;
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Metadata {
     pub flags: Flags,
     pub stream_id: u64,
@@ -63,20 +65,24 @@ pub enum Frame {
     AgentAck(agent::Ack),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Display)]
+#[display(fmt = "{}.{}", major, minor)]
 pub struct Version {
     pub major: usize,
     pub minor: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Display)]
 pub enum Capability {
     /// This is the ability for a peer to support fragmented payload in received frames.
+    #[display(fmt = "fragmentation")]
     Fragmentation,
     ///  This is the ability for a peer to decouple NOTIFY and ACK frames.
+    #[display(fmt = "pipelining")]
     Pipelining,
     /// This ability is similar to the pipelining, but here any TCP connection established
     /// between HAProxy and the agent can be used to send ACK frames.
+    #[display(fmt = "async")]
     Async,
 }
 
@@ -145,5 +151,138 @@ pub mod agent {
         pub stream_id: u64,
         pub frame_id: u64,
         pub actions: Vec<Action>,
+    }
+}
+
+pub trait BufMutExt {
+    fn put_frame(&mut self, frame: Frame);
+
+    fn put_metadata(&mut self, metadata: Metadata);
+
+    fn put_haproxy_hello(&mut self, hello: haproxy::Hello);
+
+    fn put_agent_hello(&mut self, hello: agent::Hello);
+
+    fn put_disconnect(&mut self, disconnect: Disconnect);
+
+    fn put_haproxy_notify(&mut self, notify: haproxy::Notify);
+
+    fn put_agent_ack(&mut self, ack: agent::Ack);
+}
+
+impl<T> BufMutExt for T
+where
+    T: bytes::BufMut,
+{
+    fn put_frame(&mut self, frame: Frame) {
+        match frame {
+            Frame::Unset => {}
+
+            Frame::HaproxyHello(hello) => self.put_haproxy_hello(hello),
+            Frame::AgentHello(hello) => self.put_agent_hello(hello),
+
+            Frame::HaproxyDisconnect(disconnect) => {
+                self.put_u8(SPOE_FRM_T_HAPROXY_DISCON);
+                self.put_disconnect(disconnect);
+            }
+            Frame::AgentDisconnect(disconnect) => {
+                self.put_u8(SPOE_FRM_T_AGENT_DISCON);
+                self.put_disconnect(disconnect);
+            }
+
+            Frame::HaproxyNotify(notify) => self.put_haproxy_notify(notify),
+            Frame::AgentAck(ack) => self.put_agent_ack(ack),
+        }
+    }
+
+    fn put_metadata(&mut self, metadata: Metadata) {
+        self.put_u32(metadata.flags.bits());
+        self.put_varint(metadata.stream_id);
+        self.put_varint(metadata.frame_id);
+    }
+
+    fn put_haproxy_hello(&mut self, hello: haproxy::Hello) {
+        self.put_u8(SPOE_FRM_T_HAPROXY_HELLO);
+        self.put_metadata(Metadata::default());
+        self.put_kvlist(vec![
+            (
+                SUPPORTED_VERSIONS_KEY,
+                hello
+                    .supported_versions
+                    .into_iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+                    .into(),
+            ),
+            (MAX_FRAME_SIZE_KEY, hello.max_frame_size.into()),
+            (
+                CAPABILITIES_KEY,
+                hello
+                    .capabilities
+                    .into_iter()
+                    .map(|c| c.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+                    .into(),
+            ),
+            (HEALTHCHECK_KEY, hello.healthcheck.into()),
+        ]);
+        if let Some(ref id) = hello.engine_id {
+            self.put_kv(ENGINE_ID_KEY, id.as_str());
+        }
+    }
+
+    fn put_agent_hello(&mut self, hello: agent::Hello) {
+        self.put_u8(SPOE_FRM_T_AGENT_HELLO);
+        self.put_metadata(Metadata::default());
+        self.put_kvlist(vec![
+            (VERSION_KEY, hello.version.to_string().into()),
+            (MAX_FRAME_SIZE_KEY, hello.max_frame_size.into()),
+            (
+                CAPABILITIES_KEY,
+                hello
+                    .capabilities
+                    .into_iter()
+                    .map(|c| c.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+                    .into(),
+            ),
+        ]);
+    }
+
+    fn put_disconnect(&mut self, disconnect: Disconnect) {
+        self.put_metadata(Metadata::default());
+        self.put_kvlist(vec![
+            (STATUS_CODE_KEY, disconnect.status_code.into()),
+            (MSG_KEY, disconnect.message.into()),
+        ]);
+    }
+
+    fn put_haproxy_notify(&mut self, notify: haproxy::Notify) {
+        self.put_u8(SPOE_FRM_T_HAPROXY_NOTIFY);
+        self.put_metadata(Metadata {
+            flags: Flags::default(),
+            stream_id: notify.stream_id,
+            frame_id: notify.frame_id,
+        });
+        for message in notify.messages {
+            self.put_str(message.name);
+            self.put_u8(message.args.len() as u8);
+            self.put_kvlist(message.args);
+        }
+    }
+
+    fn put_agent_ack(&mut self, ack: agent::Ack) {
+        self.put_u8(SPOE_FRM_T_AGENT_ACK);
+        self.put_metadata(Metadata {
+            flags: Flags::default(),
+            stream_id: ack.stream_id,
+            frame_id: ack.frame_id,
+        });
+        for action in ack.actions {
+            self.put_action(action);
+        }
     }
 }
