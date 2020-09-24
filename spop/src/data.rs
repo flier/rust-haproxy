@@ -140,16 +140,8 @@ where
   Input::Range: Range + AsRef<[u8]>,
   Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-  take_fn(|b: Input::Range| {
-    let s = b.as_ref();
-
-    match s.first() {
-      Some(&n) if n < 0xF0 => Some(1),
-      Some(_) => s.iter().position(|&b| b < 0x80),
-      _ => None,
-    }
-  })
-  .map(|b: Input::Range| b.as_ref().get_varint())
+  take_fn(|b: Input::Range| b.as_ref().iter().position(|&b| b < 0x80).map(|n| n + 1))
+    .map(|b: Input::Range| b.as_ref().get_varint())
 }
 
 pub fn size_of(data: &Data) -> usize {
@@ -219,6 +211,69 @@ where
         self.put_varint(v.len() as u64);
         self.put_slice(&v);
       }
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use lazy_static::lazy_static;
+
+  use super::{Data::*, *};
+
+  lazy_static! {
+    static ref TEST_DATA: Vec<(Data, &'static [u8])> = [
+      (Null, &[SPOE_DATA_T_NULL][..]),
+      (Boolean(true), &[SPOE_DATA_T_BOOL | SPOE_DATA_FL_TRUE][..]),
+      (Boolean(false), &[SPOE_DATA_T_BOOL | SPOE_DATA_FL_FALSE][..]),
+      (Int32(123), &[SPOE_DATA_T_INT32, 123][..]),
+      (Uint32(456), &[SPOE_DATA_T_UINT32, 0xf8, 0x0d][..]),
+      (Int64(789), &[SPOE_DATA_T_INT64, 0xf5, 0x22][..]),
+      (Uint64(999), &[SPOE_DATA_T_UINT64, 0xf7, 0x2f][..]),
+      (
+        IPv4(Ipv4Addr::new(127, 0, 0, 1)),
+        &[SPOE_DATA_T_IPV4, 127, 0, 0, 1],
+      ),
+      (
+        IPv6(Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0xc00a, 0x2ff)),
+        &[
+          SPOE_DATA_T_IPV6,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0xff,
+          0xff,
+          0xc0,
+          0x0a,
+          0x02,
+          0xff,
+        ],
+      ),
+      (String("hello world".to_string()), b"\x08\x0bhello world"),
+      (Binary(b"hello world".to_vec()), b"\x09\x0bhello world"),
+    ]
+    .to_vec();
+  }
+
+  #[test]
+  fn test_data() {
+    for (d, b) in TEST_DATA.iter() {
+      assert_eq!(size_of(d), b.len());
+
+      let mut v = Vec::new();
+      v.put_data(&d);
+      assert_eq!(v.as_slice(), *b, "encode data: {:?}", d);
+
+      let (r, s) = Data::parse(b).unwrap();
+      assert_eq!(r, d.clone(), "decode data: {:?}", b);
+      assert!(s.input.is_empty());
     }
   }
 }

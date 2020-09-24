@@ -12,3 +12,6 @@ This protocol is used by engines to talk to agents.
 [dependencies]
 bytes = "0.5"
 combine = "4.3"
+
+[dev-dependencies]
+lazy_static = "1.4"
