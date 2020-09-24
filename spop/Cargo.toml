@@ -13,6 +13,7 @@ This protocol is used by engines to talk to agents.
 bitflags = "1.0"
 bytes = "0.5"
 combine = "4.3"
+derive_more = "*"
 
 [dev-dependencies]
 lazy_static = "1.4"
