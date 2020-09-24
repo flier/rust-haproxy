@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use derive_more::{From, TryInto};
@@ -6,32 +7,6 @@ use crate::varint::{self, BufMutExt as _};
 
 pub const IPV4_ADDR_LEN: usize = 4;
 pub const IPV6_ADDR_LEN: usize = 16;
-
-/*
-3.1. Data types
-----------------
-
-Here is the bytewise representation of typed data:
-
-    TYPED-DATA    : <TYPE:4 bits><FLAGS:4 bits><DATA>
-
-Supported types and their representation are:
-
-    TYPE                       |  ID | DESCRIPTION
-  -----------------------------+-----+----------------------------------
-     NULL                      |  0  |  NULL   : <0>
-     Boolean                   |  1  |  BOOL   : <1+FLAG>
-     32bits signed integer     |  2  |  INT32  : <2><VALUE:varint>
-     32bits unsigned integer   |  3  |  UINT32 : <3><VALUE:varint>
-     64bits signed integer     |  4  |  INT64  : <4><VALUE:varint>
-     32bits unsigned integer   |  5  |  UNIT64 : <5><VALUE:varint>
-     IPV4                      |  6  |  IPV4   : <6><STRUCT IN_ADDR:4 bytes>
-     IPV6                      |  7  |  IPV6   : <7><STRUCT IN_ADDR6:16 bytes>
-     String                    |  8  |  STRING : <8><LENGTH:varint><BYTES>
-     Binary                    |  9  |  BINARY : <9><LENGTH:varint><BYTES>
-    10 -> 15  unused/reserved  |  -  |  -
-  -----------------------------+-----+----------------------------------
-*/
 
 /* Flags to set Boolean values */
 pub const SPOE_DATA_FL_FALSE: u8 = 0x00;
@@ -133,3 +108,6 @@ where
         }
     }
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct KVList(pub HashMap<String, Data>);
