@@ -12,4 +12,12 @@ By extension, these servers can also be called agents.
 """
 
 [dependencies]
+anyhow = "1.0"
+bytes = "0.5"
 
+tracing = "0.1"
+tracing-futures = "0.2"
+
+tokio = { version = "0.2", features = ["tcp"] }
+
+haproxy-spop = { version = "0.1", path = "../spop" }

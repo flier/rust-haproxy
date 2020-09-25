@@ -77,6 +77,10 @@ pub enum Frame {
     AgentAck(agent::Ack),
 }
 
+impl Frame {
+    pub const LENGTH_SIZE: usize = mem::size_of::<u32>();
+}
+
 /// SPOP version supported by HAProxy.
 #[derive(Clone, Debug, PartialEq, Display)]
 #[display(fmt = "{}.{}", major, minor)]
