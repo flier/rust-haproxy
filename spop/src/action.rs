@@ -1,4 +1,6 @@
-use crate::{data::BufMutExt as _, Data};
+use std::mem;
+
+use crate::{data::BufMutExt as _, varint, Data};
 
 pub const SPOE_ACT_T_SET_VAR: u8 = 1;
 pub const SPOE_ACT_T_UNSET_VAR: u8 = 2;
@@ -30,6 +32,24 @@ pub enum Action {
         scope: Scope,
         name: String,
     },
+}
+
+impl Action {
+    const TYPE_SIZE: usize = mem::size_of::<u8>();
+    const NB_ARGS_SIZE: usize = mem::size_of::<u8>();
+    const SCOPE_SIZE: usize = mem::size_of::<Scope>();
+
+    pub fn size(&self) -> usize {
+        Self::TYPE_SIZE
+            + Self::NB_ARGS_SIZE
+            + Self::SCOPE_SIZE
+            + match self {
+                Action::SetVar { name, value, .. } => {
+                    varint::size_of(name.len() as u64) + name.len() + value.size()
+                }
+                Action::UnsetVar { name, .. } => varint::size_of(name.len() as u64) + name.len(),
+            }
+    }
 }
 
 pub trait BufMutExt {

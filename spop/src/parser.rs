@@ -1,24 +1,23 @@
-use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::str::FromStr;
 
+use bytes::Bytes;
 use combine::{
     any, count_min_max,
     error::{ParseError, StreamError},
     from_str, many1,
     parser::{
-        byte::byte,
-        char::{char, digit, spaces},
+        byte::{byte, num::be_u32},
+        char::{self, char, digit, spaces},
         choice::choice,
         range::{take, take_fn},
     },
-    sep_by,
+    sep_by1,
     stream::{easy, position, Range, Stream, StreamErrorFor},
-    EasyParser, Parser, RangeStreamOnce,
+    struct_parser, token, value, EasyParser, Parser, RangeStreamOnce,
 };
 
-use crate::{action::*, data::*, frame::*, varint::BufExt};
+use crate::{action::*, data::*, frame::*, varint::BufExt, Status::*};
 
 type PositionStream<'a> = position::Stream<&'a [u8], position::IndexPositioner>;
 
@@ -86,28 +85,29 @@ where
     Input::Range: Range + AsRef<[u8]>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    metadata().then(|metadata| {
-        choice((
-            byte(SPOE_FRM_T_HAPROXY_HELLO)
-                .with(haproxy_hello())
-                .map(Frame::HaproxyHello),
-            byte(SPOE_FRM_T_HAPROXY_DISCON)
-                .with(disconnect())
-                .map(Frame::HaproxyDisconnect),
-            byte(SPOE_FRM_T_HAPROXY_NOTIFY)
-                .with(haproxy_notify(&metadata))
-                .map(Frame::HaproxyNotify),
-            byte(SPOE_FRM_T_AGENT_HELLO)
-                .with(agent_hello())
-                .map(Frame::AgentHello),
-            byte(SPOE_FRM_T_AGENT_DISCON)
-                .with(disconnect())
-                .map(Frame::AgentDisconnect),
-            byte(SPOE_FRM_T_AGENT_ACK)
-                .with(agent_ack(&metadata))
-                .map(Frame::AgentAck),
-        ))
-    })
+    choice((
+        (token(SPOE_FRM_T_UNSET), metadata()).map(|_| Frame::Unset),
+        (token(SPOE_FRM_T_HAPROXY_HELLO), metadata())
+            .with(haproxy_hello())
+            .map(Frame::HaproxyHello),
+        (token(SPOE_FRM_T_HAPROXY_DISCON), metadata())
+            .with(disconnect())
+            .map(Frame::HaproxyDisconnect),
+        token(SPOE_FRM_T_HAPROXY_NOTIFY)
+            .with(metadata())
+            .then(haproxy_notify)
+            .map(Frame::HaproxyNotify),
+        (token(SPOE_FRM_T_AGENT_HELLO), metadata())
+            .with(agent_hello())
+            .map(Frame::AgentHello),
+        (token(SPOE_FRM_T_AGENT_DISCON), metadata())
+            .with(disconnect())
+            .map(Frame::AgentDisconnect),
+        token(SPOE_FRM_T_AGENT_ACK)
+            .with(metadata())
+            .then(agent_ack)
+            .map(Frame::AgentAck),
+    ))
 }
 
 pub fn metadata<Input>() -> impl Parser<Input, Output = Metadata>
@@ -116,18 +116,13 @@ where
     Input::Range: Range + AsRef<[u8]>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    let flags = take(4).and_then(|b: Input::Range| {
-        <[u8; 4]>::try_from(b.as_ref())
-            .map(u32::from_be_bytes)
-            .map(Flags::from_bits_truncate)
-            .map_err(StreamErrorFor::<Input>::other)
-    });
-
-    (flags, varint(), varint()).map(|(flags, stream_id, frame_id)| Metadata {
-        flags,
-        stream_id,
-        frame_id,
-    })
+    struct_parser! {
+        Metadata {
+            flags: be_u32().map(Flags::from_bits_truncate),
+            stream_id: varint(),
+            frame_id: varint(),
+        }
+    }
 }
 
 pub fn kvlist<Input>() -> impl Parser<Input, Output = KVList>
@@ -169,16 +164,26 @@ where
     kvlist().and_then::<_, _, StreamErrorFor<Input>>(|mut kvs| {
         Ok(haproxy::Hello {
             supported_versions: kvs
-                .extract_into::<String, _, _, _>(SUPPORTED_VERSIONS_KEY)?
-                .parse::<Versions>()
-                .map(|versions| versions.0)
-                .map_err(StreamErrorFor::<Input>::unexpected_format)?,
-            max_frame_size: kvs.extract_into(MAX_FRAME_SIZE_KEY)?,
+                .extract::<String>(SUPPORTED_VERSIONS_KEY)
+                .ok_or_else(|| StreamErrorFor::<Input>::other(NoVersion))
+                .and_then(|s| {
+                    versions()
+                        .easy_parse(position::Stream::new(s.as_str()))
+                        .map(|versions| versions.0)
+                        .map_err(|_| StreamErrorFor::<Input>::other(BadVersion))
+                })?,
+            max_frame_size: kvs
+                .extract(MAX_FRAME_SIZE_KEY)
+                .ok_or_else(|| StreamErrorFor::<Input>::other(NoFrameSize))?,
             capabilities: kvs
-                .extract_into::<String, _, _, _>(CAPABILITIES_KEY)?
-                .split(", \t")
-                .flat_map(|s| s.parse().ok())
-                .collect::<Vec<_>>(),
+                .extract::<String>(CAPABILITIES_KEY)
+                .ok_or_else(|| StreamErrorFor::<Input>::other(NoCapabilities))
+                .and_then(|s| {
+                    capabilities()
+                        .easy_parse(position::Stream::new(s.as_str()))
+                        .map(|r| r.0)
+                        .map_err(|_| StreamErrorFor::<Input>::other(BadVersion))
+                })?,
             healthcheck: kvs.extract(HEALTHCHECK_KEY).unwrap_or_default(),
             engine_id: kvs.extract(ENGINE_ID_KEY),
         })
@@ -194,54 +199,28 @@ where
     kvlist().and_then::<_, _, StreamErrorFor<Input>>(|mut kvs| {
         Ok(agent::Hello {
             version: kvs
-                .extract_into::<String, _, _, _>(VERSION_KEY)?
-                .parse::<Version>()
-                .map_err(StreamErrorFor::<Input>::unexpected_format)?,
-            max_frame_size: kvs.extract_into(MAX_FRAME_SIZE_KEY)?,
+                .extract::<String>(VERSION_KEY)
+                .ok_or_else(|| StreamErrorFor::<Input>::other(NoVersion))
+                .and_then(|s| {
+                    version()
+                        .easy_parse(position::Stream::new(s.as_str()))
+                        .map(|r| r.0)
+                        .map_err(|_| StreamErrorFor::<Input>::other(BadVersion))
+                })?,
+            max_frame_size: kvs
+                .extract(MAX_FRAME_SIZE_KEY)
+                .ok_or_else(|| StreamErrorFor::<Input>::other(NoFrameSize))?,
             capabilities: kvs
-                .extract_into::<String, _, _, _>(CAPABILITIES_KEY)?
-                .split(", \t")
-                .flat_map(|s| s.parse().ok())
-                .collect::<Vec<_>>(),
+                .extract::<String>(CAPABILITIES_KEY)
+                .ok_or_else(|| StreamErrorFor::<Input>::other(NoCapabilities))
+                .and_then(|s| {
+                    capabilities()
+                        .easy_parse(position::Stream::new(s.as_str()))
+                        .map(|r| r.0)
+                        .map_err(|_| StreamErrorFor::<Input>::other(BadVersion))
+                })?,
         })
     })
-}
-
-impl FromStr for Capability {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "fragmentation" => Ok(Capability::Fragmentation),
-            "pipelining" => Ok(Capability::Pipelining),
-            "async" => Ok(Capability::Async),
-            _ => Err(s.to_string()),
-        }
-    }
-}
-
-struct Versions(Vec<Version>);
-
-impl FromStr for Versions {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        versions()
-            .easy_parse(position::Stream::new(s))
-            .map(|r| Versions(r.0))
-            .map_err(|err| err.to_string())
-    }
-}
-
-impl FromStr for Version {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        version()
-            .easy_parse(position::Stream::new(s))
-            .map(|r| r.0)
-            .map_err(|err| err.to_string())
-    }
 }
 
 fn versions<Input>() -> impl Parser<Input, Output = Vec<Version>>
@@ -249,7 +228,7 @@ where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    sep_by(version(), spaces().skip(char(',')))
+    sep_by1(version(), (spaces(), token(','), spaces()))
 }
 
 fn version<Input>() -> impl Parser<Input, Output = Version>
@@ -257,29 +236,42 @@ where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    (
-        from_str(many1::<String, _, _>(digit())),
-        char('.'),
-        from_str(many1::<String, _, _>(digit())),
-    )
-        .map(|(major, _, minor)| Version { major, minor })
+    struct_parser! {
+        Version {
+            major: from_str(many1::<String, _, _>(digit())),
+            _: char('.'),
+            minor: from_str(many1::<String, _, _>(digit())),
+        }
+    }
 }
 
-pub fn haproxy_notify<Input>(metadata: &Metadata) -> impl Parser<Input, Output = haproxy::Notify>
+fn capabilities<Input>() -> impl Parser<Input, Output = Vec<Capability>>
+where
+    Input: Stream<Token = char>,
+    Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
+{
+    sep_by1(
+        from_str::<Input, Capability, _>(many1::<String, _, _>(char::letter())),
+        (spaces(), token(','), spaces()),
+    )
+}
+
+pub fn haproxy_notify<Input>(metadata: Metadata) -> impl Parser<Input, Output = haproxy::Notify>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    let stream_id = metadata.stream_id;
-    let frame_id = metadata.frame_id;
+    use crate::frame::haproxy::Notify;
 
-    many1::<Vec<_>, _, _>(message()).map(move |messages| haproxy::Notify {
-        fragmented: false,
-        stream_id,
-        frame_id,
-        messages,
-    })
+    struct_parser! {
+        Notify {
+            fragmented: value(false),
+            stream_id: value(metadata.stream_id),
+            frame_id: value(metadata.frame_id),
+            messages: many1::<Vec<_>, _, _>(message()),
+        }
+    }
 }
 
 pub fn message<Input>() -> impl Parser<Input, Output = Message>
@@ -288,30 +280,32 @@ where
     Input::Range: Range + AsRef<[u8]>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    (
-        string(),
-        any().then(|nb| {
-            count_min_max::<HashMap<_, _>, _, _>(nb as usize, nb as usize, (string(), data()))
-        }),
-    )
-        .map(|(name, args)| Message { name, args })
+    struct_parser! {
+        Message {
+            name: string(),
+            args: any().then(|nb| {
+                count_min_max::<Vec<_>, _, _>(nb as usize, nb as usize, (string(), data()))
+            }),
+        }
+    }
 }
 
-pub fn agent_ack<Input>(metadata: &Metadata) -> impl Parser<Input, Output = agent::Ack>
+pub fn agent_ack<Input>(metadata: Metadata) -> impl Parser<Input, Output = agent::Ack>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    let stream_id = metadata.stream_id;
-    let frame_id = metadata.frame_id;
+    use crate::frame::agent::Ack;
 
-    many1::<Vec<_>, _, _>(action()).map(move |actions| agent::Ack {
-        fragmented: false,
-        stream_id,
-        frame_id,
-        actions,
-    })
+    struct_parser! {
+        Ack {
+            fragmented: value(false),
+            stream_id: value(metadata.stream_id),
+            frame_id: value(metadata.frame_id),
+            actions: many1::<Vec<_>, _, _>(action()),
+        }
+    }
 }
 
 pub fn action<Input>() -> impl Parser<Input, Output = Action>
@@ -320,13 +314,26 @@ where
     Input::Range: Range + AsRef<[u8]>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
+    use crate::Action::*;
+
     choice((
-        // SET-VAR requires 3 arguments
-        (byte(SPOE_ACT_T_SET_VAR), byte(3), scope(), string(), data())
-            .map(|(_, _, scope, name, value)| Action::SetVar { scope, name, value }),
-        // UNSET-VAR requires 2 arguments
-        (byte(SPOE_ACT_T_UNSET_VAR), byte(2), scope(), string())
-            .map(|(_, _, scope, name)| Action::UnsetVar { scope, name }),
+        struct_parser! {
+            SetVar {
+                _: token(SPOE_ACT_T_SET_VAR),
+                _: byte(3), // SET-VAR requires 3 arguments
+                scope: scope(),
+                name: string(),
+                value: data(),
+            }
+        },
+        struct_parser! {
+            UnsetVar {
+                _: token(SPOE_ACT_T_UNSET_VAR),
+                _: byte(2), // UNSET-VAR requires 2 arguments
+                scope: scope(),
+                name: string(),
+            }
+        },
     ))
 }
 
@@ -336,11 +343,11 @@ where
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
     choice((
-        byte(SPOE_SCOPE_PROC).map(|_| Scope::Process),
-        byte(SPOE_SCOPE_SESS).map(|_| Scope::Session),
-        byte(SPOE_SCOPE_TXN).map(|_| Scope::Transaction),
-        byte(SPOE_SCOPE_REQ).map(|_| Scope::Request),
-        byte(SPOE_SCOPE_RES).map(|_| Scope::Response),
+        token(SPOE_SCOPE_PROC).map(|_| Scope::Process),
+        token(SPOE_SCOPE_SESS).map(|_| Scope::Session),
+        token(SPOE_SCOPE_TXN).map(|_| Scope::Transaction),
+        token(SPOE_SCOPE_REQ).map(|_| Scope::Request),
+        token(SPOE_SCOPE_RES).map(|_| Scope::Response),
     ))
 }
 
@@ -384,12 +391,6 @@ Supported types and their representation are:
   -----------------------------+-----+----------------------------------
 */
 
-impl Data {
-    pub fn parse(b: &[u8]) -> Result<(Data, PositionStream), easy::ParseError<PositionStream>> {
-        data().easy_parse(position::Stream::new(b))
-    }
-}
-
 pub fn data<Input>() -> impl Parser<Input, Output = Data>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
@@ -397,37 +398,37 @@ where
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
     choice((
-        byte(SPOE_DATA_T_NULL).map(|_| Data::Null),
-        byte(SPOE_DATA_T_BOOL | SPOE_DATA_FL_FALSE).map(|_| Data::Boolean(false)),
-        byte(SPOE_DATA_T_BOOL | SPOE_DATA_FL_TRUE).map(|_| Data::Boolean(true)),
-        byte(SPOE_DATA_T_INT32)
+        token(SPOE_DATA_T_NULL).map(|_| Data::Null),
+        token(SPOE_DATA_T_BOOL | SPOE_DATA_FL_FALSE).map(|_| Data::Boolean(false)),
+        token(SPOE_DATA_T_BOOL | SPOE_DATA_FL_TRUE).map(|_| Data::Boolean(true)),
+        token(SPOE_DATA_T_INT32)
             .with(varint())
             .map(|n| Data::Int32(n as i32)),
-        byte(SPOE_DATA_T_UINT32)
+        token(SPOE_DATA_T_UINT32)
             .with(varint())
             .map(|n| Data::Uint32(n as u32)),
-        byte(SPOE_DATA_T_INT64)
+        token(SPOE_DATA_T_INT64)
             .with(varint())
             .map(|n| Data::Int64(n as i64)),
-        byte(SPOE_DATA_T_UINT64).with(varint()).map(Data::Uint64),
-        byte(SPOE_DATA_T_IPV4)
-            .with(take(IPV4_ADDR_LEN))
+        token(SPOE_DATA_T_UINT64).with(varint()).map(Data::Uint64),
+        token(SPOE_DATA_T_IPV4)
+            .with(take(Data::IPV4_ADDR_LEN))
             .and_then(|b: Input::Range| {
-                <[u8; IPV4_ADDR_LEN]>::try_from(b.as_ref())
+                <[u8; Data::IPV4_ADDR_LEN]>::try_from(b.as_ref())
                     .map(Ipv4Addr::from)
                     .map(Data::IPv4)
                     .map_err(StreamErrorFor::<Input>::other)
             }),
-        byte(SPOE_DATA_T_IPV6)
-            .with(take(IPV6_ADDR_LEN))
+        token(SPOE_DATA_T_IPV6)
+            .with(take(Data::IPV6_ADDR_LEN))
             .and_then(|b: Input::Range| {
-                <[u8; IPV6_ADDR_LEN]>::try_from(b.as_ref())
+                <[u8; Data::IPV6_ADDR_LEN]>::try_from(b.as_ref())
                     .map(Ipv6Addr::from)
                     .map(Data::IPv6)
                     .map_err(StreamErrorFor::<Input>::other)
             }),
-        byte(SPOE_DATA_T_STR).with(string()).map(Data::String),
-        byte(SPOE_DATA_T_BIN).with(binary()).map(Data::Binary),
+        token(SPOE_DATA_T_STR).with(string()).map(Data::String),
+        token(SPOE_DATA_T_BIN).with(binary()).map(Data::Binary),
     ))
 }
 
@@ -444,7 +445,7 @@ where
         })
 }
 
-pub fn binary<Input>() -> impl Parser<Input, Output = Vec<u8>>
+pub fn binary<Input>() -> impl Parser<Input, Output = Bytes>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -452,7 +453,7 @@ where
 {
     varint()
         .then(|n| take(n as usize))
-        .map(|b: Input::Range| b.as_ref().to_vec())
+        .map(|b: Input::Range| Bytes::copy_from_slice(b.as_ref()))
 }
 
 fn varint<Input>() -> impl Parser<Input, Output = u64>
@@ -467,10 +468,19 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
+    use bytes::BufMut;
+    use combine::stream::position::Stream;
     use lazy_static::lazy_static;
 
     use super::*;
-    use crate::{data::BufMutExt, Data::*};
+    use crate::{
+        data::BufMutExt as _,
+        frame::{agent, haproxy, BufMutExt as _},
+        Data::*,
+        Status,
+    };
 
     lazy_static! {
         static ref TEST_DATA: Vec<(Data, &'static [u8])> = [
@@ -508,7 +518,10 @@ mod tests {
                 ],
             ),
             (String("hello world".to_string()), b"\x08\x0bhello world"),
-            (Binary(b"hello world".to_vec()), b"\x09\x0bhello world"),
+            (
+                Binary(Bytes::from_static(b"hello world")),
+                b"\x09\x0bhello world"
+            ),
         ]
         .to_vec();
     }
@@ -516,15 +529,219 @@ mod tests {
     #[test]
     fn test_data() {
         for (d, b) in TEST_DATA.iter() {
-            assert_eq!(size_of(d), b.len());
+            assert_eq!(d.size(), b.len(), "data: {:?}", d);
 
             let mut v = Vec::new();
             v.put_data(d.clone());
             assert_eq!(v.as_slice(), *b, "encode data: {:?}", d);
 
-            let (r, s) = Data::parse(b).unwrap();
+            let (r, s) = data().easy_parse(Stream::new(*b)).unwrap();
             assert_eq!(r, d.clone(), "decode data: {:?}", b);
             assert!(s.input.is_empty());
+        }
+    }
+
+    lazy_static! {
+        static ref TEST_ACTION: Vec<(Action, Vec<u8>)> = vec![
+            (
+                Action::SetVar {
+                    scope: Scope::Request,
+                    name: "foo".into(),
+                    value: "bar".into(),
+                },
+                {
+                    let mut v = vec![SPOE_ACT_T_SET_VAR, 3, SPOE_SCOPE_REQ];
+                    v.push(3);
+                    v.extend_from_slice(b"foo");
+                    v.push(SPOE_DATA_T_STR);
+                    v.push(3);
+                    v.extend_from_slice(b"bar");
+                    v
+                }
+            ),
+            (
+                Action::UnsetVar {
+                    scope: Scope::Response,
+                    name: "foo".into(),
+                },
+                {
+                    let mut v = vec![SPOE_ACT_T_UNSET_VAR, 2, SPOE_SCOPE_RES];
+                    v.push(3);
+                    v.extend_from_slice(b"foo");
+                    v
+                }
+            ),
+        ];
+    }
+
+    #[test]
+    fn test_action() {
+        for (a, b) in TEST_ACTION.iter() {
+            assert_eq!(a.size(), b.len());
+
+            let mut v = Vec::new();
+            v.put_action(a.clone());
+            assert_eq!(v.as_slice(), *b, "encode action: {:?}", a);
+
+            let (r, s) = action().easy_parse(Stream::new(b.as_slice())).unwrap();
+            assert_eq!(&r, a, "decode action: {:?}", b);
+            assert!(s.input.is_empty());
+        }
+    }
+
+    lazy_static! {
+        static ref TEST_FRAME: Vec<(Frame, Vec<u8>)> = vec![
+            (
+                Frame::HaproxyHello(haproxy::Hello {
+                    supported_versions: vec![Version::new(2, 0)],
+                    max_frame_size: 1024,
+                    capabilities: vec![Capability::Fragmentation, Capability::Async],
+                    healthcheck: false,
+                    engine_id: Some("foobar".into()),
+                }),
+                {
+                    let mut v = vec![SPOE_FRM_T_HAPROXY_HELLO];
+                    v.put_metadata(Metadata::default());
+                    v.put_kv(SUPPORTED_VERSIONS_KEY, "2.0");
+                    v.put_kv(MAX_FRAME_SIZE_KEY, 1024u32);
+                    v.put_kv(CAPABILITIES_KEY, "fragmentation,async");
+                    v.put_kv(ENGINE_ID_KEY, "foobar");
+                    v
+                }
+            ),
+            (
+                Frame::AgentHello(agent::Hello {
+                    version: Version::new(2, 0),
+                    max_frame_size: 1024,
+                    capabilities: vec![Capability::Fragmentation, Capability::Async],
+                }),
+                {
+                    let mut v = vec![SPOE_FRM_T_AGENT_HELLO];
+                    v.put_metadata(Metadata::default());
+                    v.put_kv(VERSION_KEY, "2.0");
+                    v.put_kv(MAX_FRAME_SIZE_KEY, 1024u32);
+                    v.put_kv(CAPABILITIES_KEY, "fragmentation,async");
+                    v
+                }
+            ),
+            (
+                Frame::HaproxyNotify(haproxy::Notify {
+                    fragmented: false,
+                    stream_id: 123,
+                    frame_id: 456,
+                    messages: vec![
+                        Message {
+                            name: "client".into(),
+                            args: vec![
+                                ("frontend".into(), "world".into()),
+                                ("src".into(), Ipv4Addr::new(127, 0, 0, 1).into())
+                            ]
+                        },
+                        Message {
+                            name: "server".into(),
+                            args: vec![
+                                ("ip".into(), Ipv6Addr::LOCALHOST.into()),
+                                ("port".into(), 80u32.into())
+                            ],
+                        }
+                    ],
+                }),
+                {
+                    let mut v = vec![SPOE_FRM_T_HAPROXY_NOTIFY];
+                    v.put_metadata(Metadata {
+                        flags: Flags::default(),
+                        stream_id: 123,
+                        frame_id: 456,
+                    });
+
+                    v.put_str("client");
+                    v.put_u8(2);
+                    v.put_kv("frontend", "world");
+                    v.put_kv("src", Ipv4Addr::new(127, 0, 0, 1));
+
+                    v.put_str("server");
+                    v.put_u8(2);
+                    v.put_kv("ip", Ipv6Addr::LOCALHOST);
+                    v.put_kv("port", 80u32);
+
+                    v
+                }
+            ),
+            (
+                Frame::AgentAck(agent::Ack {
+                    fragmented: false,
+                    stream_id: 123,
+                    frame_id: 456,
+                    actions: vec![
+                        Action::SetVar {
+                            scope: Scope::Request,
+                            name: "foo".into(),
+                            value: "bar".into(),
+                        },
+                        Action::UnsetVar {
+                            scope: Scope::Response,
+                            name: "foo".into(),
+                        }
+                    ]
+                }),
+                {
+                    let mut v = vec![SPOE_FRM_T_AGENT_ACK];
+                    v.put_metadata(Metadata {
+                        flags: Flags::default(),
+                        stream_id: 123,
+                        frame_id: 456,
+                    });
+
+                    v.put_slice(&[SPOE_ACT_T_SET_VAR, 3, SPOE_SCOPE_REQ]);
+                    v.put_kv("foo", "bar");
+
+                    v.put_slice(&[SPOE_ACT_T_UNSET_VAR, 2, SPOE_SCOPE_RES]);
+                    v.put_str("foo");
+
+                    v
+                }
+            ),
+            (
+                Frame::HaproxyDisconnect(Disconnect {
+                    status_code: Status::BadVersion as u32,
+                    message: "bad version".into()
+                }),
+                {
+                    let mut v = vec![SPOE_FRM_T_HAPROXY_DISCON];
+                    v.put_metadata(Metadata::default());
+                    v.put_kv(STATUS_CODE_KEY, Status::BadVersion as u32);
+                    v.put_kv(MSG_KEY, "bad version");
+                    v
+                }
+            ),
+            (
+                Frame::AgentDisconnect(Disconnect {
+                    status_code: Status::BadFrameSize as u32,
+                    message: "bad frame size".into()
+                }),
+                {
+                    let mut v = vec![SPOE_FRM_T_AGENT_DISCON];
+                    v.put_metadata(Metadata::default());
+                    v.put_kv(STATUS_CODE_KEY, Status::BadFrameSize as u32);
+                    v.put_kv(MSG_KEY, "bad frame size");
+                    v
+                }
+            )
+        ];
+    }
+
+    #[test]
+    fn test_frame() {
+        for (f, b) in TEST_FRAME.iter() {
+            let mut v = Vec::new();
+            v.put_frame(f.clone());
+            assert_eq!(v.as_slice(), *b, "encode frame: {:?}", f);
+
+            let (r, s) = frame().easy_parse(Stream::new(b.as_slice())).unwrap();
+            assert_eq!(&r, f, "decode frame: {:?}", b);
+            assert!(s.input.is_empty());
+
+            assert_eq!(f.size(), b.len(), "frame: {:?}", r);
         }
     }
 }

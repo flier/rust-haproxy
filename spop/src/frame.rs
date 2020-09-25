@@ -1,9 +1,15 @@
-use std::collections::HashMap;
+use std::mem;
+use std::str::FromStr;
 
 use bitflags::bitflags;
 use derive_more::Display;
 
-use crate::{action::BufMutExt as _, data::BufMutExt as _, varint::BufMutExt as _, Data};
+use crate::{
+    action::BufMutExt as _,
+    data::{BufMutExt as _, Value},
+    varint::{self, BufMutExt as _},
+    Data,
+};
 
 pub const SPOE_FRM_T_UNSET: u8 = 0;
 
@@ -46,6 +52,12 @@ pub struct Metadata {
     pub frame_id: u64,
 }
 
+impl Metadata {
+    pub fn size(&self) -> usize {
+        mem::size_of::<Flags>() + varint::size_of(self.stream_id) + varint::size_of(self.frame_id)
+    }
+}
+
 /// Frame sent by HAProxy and by agents
 #[derive(Clone, Debug, PartialEq)]
 pub enum Frame {
@@ -72,6 +84,12 @@ pub struct Version {
     pub minor: usize,
 }
 
+impl Version {
+    pub fn new(major: usize, minor: usize) -> Self {
+        Version { major, minor }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Display)]
 pub enum Capability {
     /// This is the ability for a peer to support fragmented payload in received frames.
@@ -86,10 +104,37 @@ pub enum Capability {
     Async,
 }
 
+impl FromStr for Capability {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "fragmentation" => Ok(Capability::Fragmentation),
+            "pipelining" => Ok(Capability::Pipelining),
+            "async" => Ok(Capability::Async),
+            _ => Err(s.to_string()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
     pub name: String,
-    pub args: HashMap<String, Data>,
+    pub args: Vec<(String, Data)>,
+}
+
+impl Message {
+    const NB_ARGS_SIZE: usize = mem::size_of::<u8>();
+
+    pub fn size(&self) -> usize {
+        self.name.size()
+            + Self::NB_ARGS_SIZE
+            + self
+                .args
+                .iter()
+                .map(|(k, v)| k.size() + v.size())
+                .sum::<usize>()
+    }
 }
 
 /// If an error occurs, at anytime, from the HAProxy/agent side,
@@ -102,8 +147,18 @@ pub struct Disconnect {
     pub message: String,
 }
 
+impl Disconnect {
+    pub fn size(&self) -> usize {
+        (STATUS_CODE_KEY, self.status_code).size() + (MSG_KEY, self.message.as_str()).size()
+    }
+}
+
 pub mod haproxy {
-    use crate::{Capability, Message, Version};
+    use super::*;
+    use crate::{
+        frame::{Flags, Metadata},
+        Capability, Message, Version,
+    };
 
     /// This frame is the first one exchanged between HAProxy and an agent, when the connection is established.
     #[derive(Clone, Debug, PartialEq)]
@@ -120,6 +175,24 @@ pub mod haproxy {
         pub engine_id: Option<String>,
     }
 
+    impl Hello {
+        pub fn size(&self) -> usize {
+            (SUPPORTED_VERSIONS_KEY, self.supported_versions.as_slice()).size()
+                + (MAX_FRAME_SIZE_KEY, self.max_frame_size).size()
+                + (CAPABILITIES_KEY, self.capabilities.as_slice()).size()
+                + if self.healthcheck {
+                    (HEALTHCHECK_KEY, self.healthcheck).size()
+                } else {
+                    0
+                }
+                + if let Some(ref id) = self.engine_id {
+                    (ENGINE_ID_KEY, id.as_str()).size()
+                } else {
+                    0
+                }
+        }
+    }
+
     /// Information are sent to the agents inside NOTIFY frames.
     #[derive(Clone, Debug, PartialEq)]
     pub struct Notify {
@@ -128,10 +201,28 @@ pub mod haproxy {
         pub frame_id: u64,
         pub messages: Vec<Message>,
     }
+
+    impl Notify {
+        pub fn metadata(&self) -> Metadata {
+            Metadata {
+                flags: Flags::default(),
+                stream_id: self.stream_id,
+                frame_id: self.frame_id,
+            }
+        }
+
+        pub fn size(&self) -> usize {
+            self.messages.iter().map(|msg| msg.size()).sum()
+        }
+    }
 }
 
 pub mod agent {
-    use crate::{Action, Capability, Version};
+    use super::*;
+    use crate::{
+        frame::{Flags, Metadata},
+        Action, Capability, Version,
+    };
 
     /// This frame is sent in reply to a HAPROXY-HELLO frame to finish a HELLO handshake.
     #[derive(Clone, Debug, PartialEq)]
@@ -144,6 +235,14 @@ pub mod agent {
         pub capabilities: Vec<Capability>,
     }
 
+    impl Hello {
+        pub fn size(&self) -> usize {
+            (VERSION_KEY, self.version.to_string()).size()
+                + (MAX_FRAME_SIZE_KEY, self.max_frame_size).size()
+                + (CAPABILITIES_KEY, self.capabilities.as_slice()).size()
+        }
+    }
+
     /// ACK frames must be sent by agents to reply to NOTIFY frames.
     #[derive(Clone, Debug, PartialEq)]
     pub struct Ack {
@@ -151,6 +250,47 @@ pub mod agent {
         pub stream_id: u64,
         pub frame_id: u64,
         pub actions: Vec<Action>,
+    }
+
+    impl Ack {
+        pub fn metadata(&self) -> Metadata {
+            Metadata {
+                flags: Flags::default(),
+                stream_id: self.stream_id,
+                frame_id: self.frame_id,
+            }
+        }
+
+        pub fn size(&self) -> usize {
+            self.actions.iter().map(|action| action.size()).sum()
+        }
+    }
+}
+
+impl Frame {
+    const TYPE_SIZE: usize = mem::size_of::<u8>();
+
+    pub fn size(&self) -> usize {
+        Self::TYPE_SIZE
+            + self.metadata().unwrap_or_default().size()
+            + match self {
+                Frame::Unset => 0,
+                Frame::HaproxyHello(hello) => hello.size(),
+                Frame::HaproxyNotify(notify) => notify.size(),
+                Frame::AgentHello(hello) => hello.size(),
+                Frame::AgentAck(ack) => ack.size(),
+                Frame::HaproxyDisconnect(disconnect) | Frame::AgentDisconnect(disconnect) => {
+                    disconnect.size()
+                }
+            }
+    }
+
+    pub fn metadata(&self) -> Option<Metadata> {
+        match self {
+            Frame::HaproxyNotify(notify) => Some(notify.metadata()),
+            Frame::AgentAck(ack) => Some(ack.metadata()),
+            _ => None,
+        }
     }
 }
 
@@ -176,22 +316,43 @@ where
 {
     fn put_frame(&mut self, frame: Frame) {
         match frame {
-            Frame::Unset => {}
+            Frame::Unset => {
+                self.put_u8(SPOE_FRM_T_UNSET);
+                self.put_metadata(Metadata::default());
+            }
 
-            Frame::HaproxyHello(hello) => self.put_haproxy_hello(hello),
-            Frame::AgentHello(hello) => self.put_agent_hello(hello),
+            Frame::HaproxyHello(hello) => {
+                self.put_u8(SPOE_FRM_T_HAPROXY_HELLO);
+                self.put_metadata(Metadata::default());
+                self.put_haproxy_hello(hello);
+            }
+            Frame::AgentHello(hello) => {
+                self.put_u8(SPOE_FRM_T_AGENT_HELLO);
+                self.put_metadata(Metadata::default());
+                self.put_agent_hello(hello);
+            }
 
             Frame::HaproxyDisconnect(disconnect) => {
                 self.put_u8(SPOE_FRM_T_HAPROXY_DISCON);
+                self.put_metadata(Metadata::default());
                 self.put_disconnect(disconnect);
             }
             Frame::AgentDisconnect(disconnect) => {
                 self.put_u8(SPOE_FRM_T_AGENT_DISCON);
+                self.put_metadata(Metadata::default());
                 self.put_disconnect(disconnect);
             }
 
-            Frame::HaproxyNotify(notify) => self.put_haproxy_notify(notify),
-            Frame::AgentAck(ack) => self.put_agent_ack(ack),
+            Frame::HaproxyNotify(notify) => {
+                self.put_u8(SPOE_FRM_T_HAPROXY_NOTIFY);
+                self.put_metadata(notify.metadata());
+                self.put_haproxy_notify(notify);
+            }
+            Frame::AgentAck(ack) => {
+                self.put_u8(SPOE_FRM_T_AGENT_ACK);
+                self.put_metadata(ack.metadata());
+                self.put_agent_ack(ack);
+            }
         }
     }
 
@@ -202,71 +363,29 @@ where
     }
 
     fn put_haproxy_hello(&mut self, hello: haproxy::Hello) {
-        self.put_u8(SPOE_FRM_T_HAPROXY_HELLO);
-        self.put_metadata(Metadata::default());
-        self.put_kvlist(vec![
-            (
-                SUPPORTED_VERSIONS_KEY,
-                hello
-                    .supported_versions
-                    .into_iter()
-                    .map(|v| v.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-                    .into(),
-            ),
-            (MAX_FRAME_SIZE_KEY, hello.max_frame_size.into()),
-            (
-                CAPABILITIES_KEY,
-                hello
-                    .capabilities
-                    .into_iter()
-                    .map(|c| c.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-                    .into(),
-            ),
-            (HEALTHCHECK_KEY, hello.healthcheck.into()),
-        ]);
+        self.put_kv(SUPPORTED_VERSIONS_KEY, hello.supported_versions);
+        self.put_kv(MAX_FRAME_SIZE_KEY, hello.max_frame_size);
+        self.put_kv(CAPABILITIES_KEY, hello.capabilities);
+        if hello.healthcheck {
+            self.put_kv(HEALTHCHECK_KEY, hello.healthcheck);
+        }
         if let Some(ref id) = hello.engine_id {
             self.put_kv(ENGINE_ID_KEY, id.as_str());
         }
     }
 
     fn put_agent_hello(&mut self, hello: agent::Hello) {
-        self.put_u8(SPOE_FRM_T_AGENT_HELLO);
-        self.put_metadata(Metadata::default());
-        self.put_kvlist(vec![
-            (VERSION_KEY, hello.version.to_string().into()),
-            (MAX_FRAME_SIZE_KEY, hello.max_frame_size.into()),
-            (
-                CAPABILITIES_KEY,
-                hello
-                    .capabilities
-                    .into_iter()
-                    .map(|c| c.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-                    .into(),
-            ),
-        ]);
+        self.put_kv(VERSION_KEY, hello.version.to_string());
+        self.put_kv(MAX_FRAME_SIZE_KEY, hello.max_frame_size);
+        self.put_kv(CAPABILITIES_KEY, hello.capabilities);
     }
 
     fn put_disconnect(&mut self, disconnect: Disconnect) {
-        self.put_metadata(Metadata::default());
-        self.put_kvlist(vec![
-            (STATUS_CODE_KEY, disconnect.status_code.into()),
-            (MSG_KEY, disconnect.message.into()),
-        ]);
+        self.put_kv(STATUS_CODE_KEY, disconnect.status_code);
+        self.put_kv(MSG_KEY, disconnect.message);
     }
 
     fn put_haproxy_notify(&mut self, notify: haproxy::Notify) {
-        self.put_u8(SPOE_FRM_T_HAPROXY_NOTIFY);
-        self.put_metadata(Metadata {
-            flags: Flags::default(),
-            stream_id: notify.stream_id,
-            frame_id: notify.frame_id,
-        });
         for message in notify.messages {
             self.put_str(message.name);
             self.put_u8(message.args.len() as u8);
@@ -275,12 +394,6 @@ where
     }
 
     fn put_agent_ack(&mut self, ack: agent::Ack) {
-        self.put_u8(SPOE_FRM_T_AGENT_ACK);
-        self.put_metadata(Metadata {
-            flags: Flags::default(),
-            stream_id: ack.stream_id,
-            frame_id: ack.frame_id,
-        });
         for action in ack.actions {
             self.put_action(action);
         }

@@ -10,18 +10,27 @@ Variable-length integer (varint) are encoded using Peers encoding:
  ...
 */
 
-pub fn size_of(n: u64) -> usize {
-    match n {
-        _ if (0x0000000000000000..=0x00000000000000ef).contains(&n) => 1,
-        _ if (0x00000000000000f0..=0x00000000000008ef).contains(&n) => 2,
-        _ if (0x00000000000008f0..=0x00000000000408ef).contains(&n) => 3,
-        _ if (0x00000000000408f0..=0x00000000020408ef).contains(&n) => 4,
-        _ if (0x00000000020408f0..=0x00000001020408ef).contains(&n) => 5,
-        _ if (0x00000001020408f0..=0x00000081020408ef).contains(&n) => 6,
-        _ if (0x00000081020408f0..=0x00004081020408ef).contains(&n) => 7,
-        _ if (0x00004081020408f0..=0x00204081020408ef).contains(&n) => 8,
-        _ if (0x00204081020408f0..=0x10204081020408ef).contains(&n) => 9,
-        _ => 10,
+pub const fn size_of(n: u64) -> usize {
+    if n <= 0x00000000000000ef {
+        1
+    } else if 0x00000000000000f0 <= n && n <= 0x00000000000008ef {
+        2
+    } else if 0x00000000000008f0 <= n && n <= 0x00000000000408ef {
+        3
+    } else if 0x00000000000408f0 <= n && n <= 0x00000000020408ef {
+        4
+    } else if 0x00000000020408f0 <= n && n <= 0x00000001020408ef {
+        5
+    } else if 0x00000001020408f0 <= n && n <= 0x00000081020408ef {
+        6
+    } else if 0x00000081020408f0 <= n && n <= 0x00004081020408ef {
+        7
+    } else if 0x00004081020408f0 <= n && n <= 0x00204081020408ef {
+        8
+    } else if 0x00204081020408f0 <= n && n <= 0x10204081020408ef {
+        9
+    } else {
+        10
     }
 }
 

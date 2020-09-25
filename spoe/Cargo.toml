@@ -10,4 +10,5 @@ A SPOE is a filter talking to servers managed ba a SPOA to offload the
 stream processing. An engine is attached to a proxy. A proxy can have
 several engines. Each engine is linked to an agent and only one.
 """
+
 [dependencies]
