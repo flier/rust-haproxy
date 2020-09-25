@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
+use std::iter::FromIterator;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use bytes::Bytes;
@@ -79,7 +81,7 @@ impl Frame {
     }
 }
 
-pub fn frame<Input>() -> impl Parser<Input, Output = Frame>
+fn frame<Input>() -> impl Parser<Input, Output = Frame>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -89,49 +91,74 @@ where
         (token(SPOE_FRM_T_UNSET), metadata()).map(|_| Frame::Unset),
         (token(SPOE_FRM_T_HAPROXY_HELLO), metadata())
             .with(haproxy_hello())
-            .map(Frame::HaproxyHello),
+            .map(Frame::HaproxyHello)
+            .expected("haproxy::hello"),
         (token(SPOE_FRM_T_HAPROXY_DISCON), metadata())
             .with(disconnect())
-            .map(Frame::HaproxyDisconnect),
+            .map(Frame::HaproxyDisconnect)
+            .expected("haproxy::disconnect"),
         token(SPOE_FRM_T_HAPROXY_NOTIFY)
             .with(metadata())
             .then(haproxy_notify)
-            .map(Frame::HaproxyNotify),
+            .map(Frame::HaproxyNotify)
+            .expected("haproxy::notify"),
         (token(SPOE_FRM_T_AGENT_HELLO), metadata())
             .with(agent_hello())
-            .map(Frame::AgentHello),
+            .map(Frame::AgentHello)
+            .expected("agent::hello"),
         (token(SPOE_FRM_T_AGENT_DISCON), metadata())
             .with(disconnect())
-            .map(Frame::AgentDisconnect),
+            .map(Frame::AgentDisconnect)
+            .expected("agent::disconnect"),
         token(SPOE_FRM_T_AGENT_ACK)
             .with(metadata())
             .then(agent_ack)
-            .map(Frame::AgentAck),
+            .map(Frame::AgentAck)
+            .expected("agent::ack"),
     ))
+    .expected("frame")
 }
 
-pub fn metadata<Input>() -> impl Parser<Input, Output = Metadata>
+fn metadata<Input>() -> impl Parser<Input, Output = Metadata>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    struct_parser! {
+    (struct_parser! {
         Metadata {
-            flags: be_u32().map(Flags::from_bits_truncate),
-            stream_id: varint(),
-            frame_id: varint(),
+            flags: be_u32().map(Flags::from_bits_truncate).expected("flags"),
+            stream_id: varint().expected("stream_id"),
+            frame_id: varint().expected("frame_id"),
         }
+    })
+    .expected("metadata")
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct KVList(pub HashMap<String, Data>);
+
+impl<K> FromIterator<(K, Data)> for KVList
+where
+    K: Into<String>,
+{
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (K, Data)>,
+    {
+        KVList(iter.into_iter().map(|(k, v)| (k.into(), v)).collect())
     }
 }
 
-pub fn kvlist<Input>() -> impl Parser<Input, Output = KVList>
+fn kvlist<Input>() -> impl Parser<Input, Output = KVList>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    many1((string(), data())).map(KVList)
+    many1((string().expected("key"), data().expected("value")))
+        .map(KVList)
+        .expected("kvlist")
 }
 
 impl KVList {
@@ -155,7 +182,7 @@ impl KVList {
     }
 }
 
-pub fn haproxy_hello<Input>() -> impl Parser<Input, Output = haproxy::Hello>
+fn haproxy_hello<Input>() -> impl Parser<Input, Output = haproxy::Hello>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -190,7 +217,7 @@ where
     })
 }
 
-pub fn agent_hello<Input>() -> impl Parser<Input, Output = agent::Hello>
+fn agent_hello<Input>() -> impl Parser<Input, Output = agent::Hello>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -228,7 +255,7 @@ where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    sep_by1(version(), (spaces(), token(','), spaces()))
+    sep_by1(version(), (spaces(), token(','), spaces())).expected("versions")
 }
 
 fn version<Input>() -> impl Parser<Input, Output = Version>
@@ -236,13 +263,14 @@ where
     Input: Stream<Token = char>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    struct_parser! {
+    (struct_parser! {
         Version {
-            major: from_str(many1::<String, _, _>(digit())),
+            major: from_str(many1::<String, _, _>(digit())).expected("major"),
             _: char('.'),
-            minor: from_str(many1::<String, _, _>(digit())),
+            minor: from_str(many1::<String, _, _>(digit())).expected("minor"),
         }
-    }
+    })
+    .expected("version")
 }
 
 fn capabilities<Input>() -> impl Parser<Input, Output = Vec<Capability>>
@@ -254,9 +282,10 @@ where
         from_str::<Input, Capability, _>(many1::<String, _, _>(char::letter())),
         (spaces(), token(','), spaces()),
     )
+    .expected("capabilities")
 }
 
-pub fn haproxy_notify<Input>(metadata: Metadata) -> impl Parser<Input, Output = haproxy::Notify>
+fn haproxy_notify<Input>(metadata: Metadata) -> impl Parser<Input, Output = haproxy::Notify>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -269,12 +298,12 @@ where
             fragmented: value(false),
             stream_id: value(metadata.stream_id),
             frame_id: value(metadata.frame_id),
-            messages: many1::<Vec<_>, _, _>(message()),
+            messages: many1::<Vec<_>, _, _>(message().expected("message")).expected("messages"),
         }
     }
 }
 
-pub fn message<Input>() -> impl Parser<Input, Output = Message>
+fn message<Input>() -> impl Parser<Input, Output = Message>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -284,13 +313,13 @@ where
         Message {
             name: string(),
             args: any().then(|nb| {
-                count_min_max::<Vec<_>, _, _>(nb as usize, nb as usize, (string(), data()))
-            }),
+                count_min_max::<Vec<_>, _, _>(nb as usize, nb as usize, (string().expected("key"), data().expected("value")))
+            }).expected("args"),
         }
     }
 }
 
-pub fn agent_ack<Input>(metadata: Metadata) -> impl Parser<Input, Output = agent::Ack>
+fn agent_ack<Input>(metadata: Metadata) -> impl Parser<Input, Output = agent::Ack>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -303,12 +332,12 @@ where
             fragmented: value(false),
             stream_id: value(metadata.stream_id),
             frame_id: value(metadata.frame_id),
-            actions: many1::<Vec<_>, _, _>(action()),
+            actions: many1::<Vec<_>, _, _>(action()).expected("actions"),
         }
     }
 }
 
-pub fn action<Input>() -> impl Parser<Input, Output = Action>
+fn action<Input>() -> impl Parser<Input, Output = Action>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -322,8 +351,8 @@ where
                 _: token(SPOE_ACT_T_SET_VAR),
                 _: byte(3), // SET-VAR requires 3 arguments
                 scope: scope(),
-                name: string(),
-                value: data(),
+                name: string().expected("name"),
+                value: data().expected("value"),
             }
         },
         struct_parser! {
@@ -331,13 +360,14 @@ where
                 _: token(SPOE_ACT_T_UNSET_VAR),
                 _: byte(2), // UNSET-VAR requires 2 arguments
                 scope: scope(),
-                name: string(),
+                name: string().expected("name"),
             }
         },
     ))
+    .expected("action")
 }
 
-pub fn scope<Input>() -> impl Parser<Input, Output = Scope>
+fn scope<Input>() -> impl Parser<Input, Output = Scope>
 where
     Input: Stream<Token = u8>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
@@ -349,9 +379,10 @@ where
         token(SPOE_SCOPE_REQ).map(|_| Scope::Request),
         token(SPOE_SCOPE_RES).map(|_| Scope::Response),
     ))
+    .expected("scope")
 }
 
-pub fn disconnect<Input>() -> impl Parser<Input, Output = Disconnect>
+fn disconnect<Input>() -> impl Parser<Input, Output = Disconnect>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -391,7 +422,7 @@ Supported types and their representation are:
   -----------------------------+-----+----------------------------------
 */
 
-pub fn data<Input>() -> impl Parser<Input, Output = Data>
+fn data<Input>() -> impl Parser<Input, Output = Data>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -403,14 +434,20 @@ where
         token(SPOE_DATA_T_BOOL | SPOE_DATA_FL_TRUE).map(|_| Data::Boolean(true)),
         token(SPOE_DATA_T_INT32)
             .with(varint())
-            .map(|n| Data::Int32(n as i32)),
+            .map(|n| Data::Int32(n as i32))
+            .expected("int32"),
         token(SPOE_DATA_T_UINT32)
             .with(varint())
-            .map(|n| Data::Uint32(n as u32)),
+            .map(|n| Data::Uint32(n as u32))
+            .expected("uint32"),
         token(SPOE_DATA_T_INT64)
             .with(varint())
-            .map(|n| Data::Int64(n as i64)),
-        token(SPOE_DATA_T_UINT64).with(varint()).map(Data::Uint64),
+            .map(|n| Data::Int64(n as i64))
+            .expected("int64"),
+        token(SPOE_DATA_T_UINT64)
+            .with(varint())
+            .map(Data::Uint64)
+            .expected("uint64"),
         token(SPOE_DATA_T_IPV4)
             .with(take(Data::IPV4_ADDR_LEN))
             .and_then(|b: Input::Range| {
@@ -418,7 +455,8 @@ where
                     .map(Ipv4Addr::from)
                     .map(Data::IPv4)
                     .map_err(StreamErrorFor::<Input>::other)
-            }),
+            })
+            .expected("ipv4"),
         token(SPOE_DATA_T_IPV6)
             .with(take(Data::IPV6_ADDR_LEN))
             .and_then(|b: Input::Range| {
@@ -426,13 +464,14 @@ where
                     .map(Ipv6Addr::from)
                     .map(Data::IPv6)
                     .map_err(StreamErrorFor::<Input>::other)
-            }),
+            })
+            .expected("ipv6"),
         token(SPOE_DATA_T_STR).with(string()).map(Data::String),
         token(SPOE_DATA_T_BIN).with(binary()).map(Data::Binary),
     ))
 }
 
-pub fn string<Input>() -> impl Parser<Input, Output = String>
+fn string<Input>() -> impl Parser<Input, Output = String>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -443,9 +482,10 @@ where
         .and_then(|b: Input::Range| {
             String::from_utf8(b.as_ref().to_vec()).map_err(StreamErrorFor::<Input>::other)
         })
+        .expected("string")
 }
 
-pub fn binary<Input>() -> impl Parser<Input, Output = Bytes>
+fn binary<Input>() -> impl Parser<Input, Output = Bytes>
 where
     Input: Stream<Token = u8> + RangeStreamOnce,
     Input::Range: Range + AsRef<[u8]>,
@@ -454,6 +494,7 @@ where
     varint()
         .then(|n| take(n as usize))
         .map(|b: Input::Range| Bytes::copy_from_slice(b.as_ref()))
+        .expected("binary")
 }
 
 fn varint<Input>() -> impl Parser<Input, Output = u64>
@@ -464,6 +505,7 @@ where
 {
     take_fn(|b: Input::Range| b.as_ref().iter().position(|&b| b < 0x80).map(|n| n + 1))
         .map(|b: Input::Range| b.as_ref().get_varint())
+        .expected("varint")
 }
 
 #[cfg(test)]
@@ -587,6 +629,17 @@ mod tests {
             assert_eq!(&r, a, "decode action: {:?}", b);
             assert!(s.input.is_empty());
         }
+    }
+
+    #[test]
+    fn test_capabilities() {
+        assert_eq!(
+            capabilities().easy_parse(position::Stream::new("async,foobar,fragmentation")),
+            Err(easy::Errors {
+                position: position::SourcePosition { line: 1, column: 7 },
+                errors: vec![easy::Error::Message("foobar".into())]
+            })
+        );
     }
 
     lazy_static! {

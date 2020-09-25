@@ -11,6 +11,7 @@ pub const SPOE_SCOPE_TXN: u8 = 2;
 pub const SPOE_SCOPE_REQ: u8 = 3;
 pub const SPOE_SCOPE_RES: u8 = 4;
 
+/// the variable scope
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Scope {
@@ -21,15 +22,23 @@ pub enum Scope {
     Response = SPOE_SCOPE_RES,
 }
 
+/// dynamically action on the processing of a stream.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
+    /// set the value for an existing variable.
     SetVar {
+        /// the variable scope
         scope: Scope,
+        /// the variable name
         name: String,
+        /// the variable value
         value: Data,
     },
+    /// unset the value for an existing variable.
     UnsetVar {
+        /// the variable scope
         scope: Scope,
+        /// the variable name
         name: String,
     },
 }

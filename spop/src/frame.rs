@@ -77,6 +77,7 @@ pub enum Frame {
     AgentAck(agent::Ack),
 }
 
+/// SPOP version supported by HAProxy.
 #[derive(Clone, Debug, PartialEq, Display)]
 #[display(fmt = "{}.{}", major, minor)]
 pub struct Version {
@@ -90,6 +91,7 @@ impl Version {
     }
 }
 
+/// capabilities supported by HAProxy
 #[derive(Clone, Copy, Debug, PartialEq, Display)]
 pub enum Capability {
     /// This is the ability for a peer to support fragmented payload in received frames.
@@ -117,6 +119,7 @@ impl FromStr for Capability {
     }
 }
 
+/// define a new SPOE message with the name
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
     pub name: String,

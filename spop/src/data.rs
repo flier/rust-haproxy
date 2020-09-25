@@ -1,11 +1,9 @@
-use std::collections::HashMap;
 use std::fmt;
-use std::iter::FromIterator;
 use std::mem;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use bytes::Bytes;
-use derive_more::{Deref, From, Into, TryInto};
+use derive_more::{From, TryInto};
 
 use crate::varint::{self, BufMutExt as _};
 
@@ -155,21 +153,6 @@ impl Data {
                 Data::String(s) => s.size(),
                 Data::Binary(v) => v.size(),
             }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Deref, From, Into)]
-pub struct KVList(pub HashMap<String, Data>);
-
-impl<K> FromIterator<(K, Data)> for KVList
-where
-    K: Into<String>,
-{
-    fn from_iter<T>(iter: T) -> Self
-    where
-        T: IntoIterator<Item = (K, Data)>,
-    {
-        KVList(iter.into_iter().map(|(k, v)| (k.into(), v)).collect())
     }
 }
 
