@@ -1,6 +1,3 @@
-use std::mem;
-use std::net::Shutdown;
-
 use anyhow::{Context, Result};
 use bytes::{BufMut, BytesMut};
 use hexplay::HexViewBuilder;

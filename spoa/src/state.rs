@@ -1,13 +1,15 @@
 use std::cmp;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryInto;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use derive_more::{From, TryInto};
 use tracing::{debug, instrument, trace, warn};
 
 use crate::conn::MAX_FRAME_SIZE;
-use crate::spop::{agent, haproxy, Capability, Frame, Status, Version};
+use crate::spop::{agent, haproxy, Capability, Frame, Message, Status, Version};
 
 #[derive(Debug, From, TryInto)]
 pub enum State {
@@ -27,6 +29,7 @@ pub struct Processing {
     pub version: Version,
     pub max_frame_size: u32,
     pub capabilities: Vec<Capability>,
+    pub messages: Arc<Mutex<HashMap<(u64, u64), Vec<Message>>>>,
 }
 
 impl Default for State {
@@ -89,6 +92,7 @@ impl Connecting {
             version,
             max_frame_size,
             capabilities: capabilities.clone(),
+            messages: Arc::new(Mutex::new(HashMap::new())),
         }
         .into();
 
@@ -111,6 +115,21 @@ impl Processing {
                 trace!(?disconnect, "peer closed connection");
 
                 Err(Status::None).context("peer closed connection")
+            }
+            Frame::HaproxyNotify(haproxy::Notify {
+                fragmented,
+                stream_id,
+                frame_id,
+                messages,
+            }) => {
+                self.messages
+                    .lock()
+                    .expect("messages")
+                    .entry((stream_id, frame_id))
+                    .or_insert_with(Vec::new)
+                    .extend(messages.into_iter());
+
+                Ok((self.into(), if fragmented { None } else { None }))
             }
             _ => {
                 warn!(?frame, "unexpected frame");
