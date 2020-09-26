@@ -2,13 +2,13 @@ use std::mem;
 use std::str::FromStr;
 
 use bitflags::bitflags;
-use derive_more::Display;
+use derive_more::{Display, From, TryInto};
 
 use crate::{
     action::BufMutExt as _,
     data::{BufMutExt as _, Value},
     varint::{self, BufMutExt as _},
-    Data,
+    Data, Status,
 };
 
 pub const SPOE_FRM_T_UNSET: u8 = 0;
@@ -58,45 +58,88 @@ impl Metadata {
     }
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Display)]
+pub enum Type {
+    Unset = SPOE_FRM_T_UNSET,
+    /// Sent by HAProxy when it opens a connection on an agent.
+    HaproxyHello = SPOE_FRM_T_HAPROXY_HELLO,
+    /// Sent by HAProxy when it want to close the connection or in reply to an AGENT-DISCONNECT frame
+    HaproxyDisconnect = SPOE_FRM_T_HAPROXY_DISCON,
+    /// Sent by HAProxy to pass information to an agent
+    HaproxyNotify = SPOE_FRM_T_HAPROXY_NOTIFY,
+    /// Reply to a HAPROXY-HELLO frame, when the connection is established
+    AgentHello = SPOE_FRM_T_AGENT_HELLO,
+    /// Sent by an agent just before closing the connection
+    AgentDisconnect = SPOE_FRM_T_AGENT_DISCON,
+    /// Sent to acknowledge a NOTIFY frame
+    AgentAck = SPOE_FRM_T_AGENT_ACK,
+}
+
 /// Frame sent by HAProxy and by agents
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, From, TryInto)]
 pub enum Frame {
     /// Used for all frames but the first when a payload is fragmented.
     Unset,
     /// Sent by HAProxy when it opens a connection on an agent.
     HaproxyHello(haproxy::Hello),
     /// Sent by HAProxy when it want to close the connection or in reply to an AGENT-DISCONNECT frame
-    HaproxyDisconnect(Disconnect),
+    HaproxyDisconnect(haproxy::Disconnect),
     /// Sent by HAProxy to pass information to an agent
     HaproxyNotify(haproxy::Notify),
     /// Reply to a HAPROXY-HELLO frame, when the connection is established
     AgentHello(agent::Hello),
     /// Sent by an agent just before closing the connection
-    AgentDisconnect(Disconnect),
+    AgentDisconnect(agent::Disconnect),
     /// Sent to acknowledge a NOTIFY frame
     AgentAck(agent::Ack),
 }
 
 impl Frame {
     pub const LENGTH_SIZE: usize = mem::size_of::<u32>();
+
+    pub fn frame_type(&self) -> Type {
+        match self {
+            Frame::Unset => Type::Unset,
+            Frame::HaproxyHello(_) => Type::HaproxyHello,
+            Frame::HaproxyDisconnect(_) => Type::HaproxyDisconnect,
+            Frame::HaproxyNotify(_) => Type::HaproxyNotify,
+            Frame::AgentHello(_) => Type::AgentHello,
+            Frame::AgentDisconnect(_) => Type::AgentDisconnect,
+            Frame::AgentAck(_) => Type::AgentAck,
+        }
+    }
+
+    pub fn agent_disconnect<S: Into<String>>(status: Status, reason: S) -> Self {
+        Frame::AgentDisconnect(agent::Disconnect(Disconnect {
+            status_code: status as u32,
+            message: reason.into(),
+        }))
+    }
 }
 
 /// SPOP version supported by HAProxy.
-#[derive(Clone, Debug, PartialEq, Display)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Display)]
 #[display(fmt = "{}.{}", major, minor)]
 pub struct Version {
     pub major: usize,
     pub minor: usize,
 }
 
+impl Default for Version {
+    fn default() -> Self {
+        Version { major: 2, minor: 0 }
+    }
+}
+
 impl Version {
-    pub fn new(major: usize, minor: usize) -> Self {
+    pub const fn new(major: usize, minor: usize) -> Self {
         Version { major, minor }
     }
 }
 
 /// capabilities supported by HAProxy
-#[derive(Clone, Copy, Debug, PartialEq, Display)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Display)]
 pub enum Capability {
     /// This is the ability for a peer to support fragmented payload in received frames.
     #[display(fmt = "fragmentation")]
@@ -167,6 +210,9 @@ pub mod haproxy {
         Capability, Message, Version,
     };
 
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Disconnect(pub super::Disconnect);
+
     /// This frame is the first one exchanged between HAProxy and an agent, when the connection is established.
     #[derive(Clone, Debug, PartialEq)]
     pub struct Hello {
@@ -231,6 +277,9 @@ pub mod agent {
         Action, Capability, Version,
     };
 
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Disconnect(pub super::Disconnect);
+
     /// This frame is sent in reply to a HAPROXY-HELLO frame to finish a HELLO handshake.
     #[derive(Clone, Debug, PartialEq)]
     pub struct Hello {
@@ -286,9 +335,8 @@ impl Frame {
                 Frame::HaproxyNotify(notify) => notify.size(),
                 Frame::AgentHello(hello) => hello.size(),
                 Frame::AgentAck(ack) => ack.size(),
-                Frame::HaproxyDisconnect(disconnect) | Frame::AgentDisconnect(disconnect) => {
-                    disconnect.size()
-                }
+                Frame::HaproxyDisconnect(haproxy::Disconnect(disconnect))
+                | Frame::AgentDisconnect(agent::Disconnect(disconnect)) => disconnect.size(),
             }
     }
 
@@ -339,12 +387,12 @@ where
                 self.put_agent_hello(hello);
             }
 
-            Frame::HaproxyDisconnect(disconnect) => {
+            Frame::HaproxyDisconnect(haproxy::Disconnect(disconnect)) => {
                 self.put_u8(SPOE_FRM_T_HAPROXY_DISCON);
                 self.put_metadata(Metadata::default());
                 self.put_disconnect(disconnect);
             }
-            Frame::AgentDisconnect(disconnect) => {
+            Frame::AgentDisconnect(agent::Disconnect(disconnect)) => {
                 self.put_u8(SPOE_FRM_T_AGENT_DISCON);
                 self.put_metadata(Metadata::default());
                 self.put_disconnect(disconnect);

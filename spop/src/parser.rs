@@ -95,6 +95,7 @@ where
             .expected("haproxy::hello"),
         (token(SPOE_FRM_T_HAPROXY_DISCON), metadata())
             .with(disconnect())
+            .map(haproxy::Disconnect)
             .map(Frame::HaproxyDisconnect)
             .expected("haproxy::disconnect"),
         token(SPOE_FRM_T_HAPROXY_NOTIFY)
@@ -108,6 +109,7 @@ where
             .expected("agent::hello"),
         (token(SPOE_FRM_T_AGENT_DISCON), metadata())
             .with(disconnect())
+            .map(agent::Disconnect)
             .map(Frame::AgentDisconnect)
             .expected("agent::disconnect"),
         token(SPOE_FRM_T_AGENT_ACK)

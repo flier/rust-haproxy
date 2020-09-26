@@ -6,16 +6,16 @@ This is a very simple program that can be used to replicate HTTP requests
 via the SPOP protocol.  All requests are replicated to the web address (URL)
 selected when running the program.
 */
-
 use anyhow::{Context, Result};
 use structopt::StructOpt;
 use tokio::{
     net::{TcpListener, TcpStream},
     stream::StreamExt,
 };
-use tracing::{debug, instrument, warn};
+use tracing::{debug, info_span, warn};
+use tracing_futures::Instrument;
 
-use haproxy::Connection;
+use haproxy::{spoa::State, Connection};
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -55,24 +55,29 @@ pub async fn main() -> Result<()> {
 
     let mut listener = TcpListener::bind((opt.address.as_str(), opt.port)).await?;
 
-    debug!("listen on: {}", listener.local_addr()?);
+    let span = info_span!("agent", addr = %listener.local_addr()?);
+    let _s = span.enter();
 
     let mut incoming = listener.incoming();
 
     while let Some(stream) = incoming.next().await {
         match stream {
             Ok(stream) => {
-                debug!("client accepted: {}", stream.peer_addr()?);
+                let peer = stream.peer_addr()?;
 
-                tokio::spawn(async move {
-                    match process(stream).await {
-                        Ok(_) => debug!("client closed"),
-                        Err(err) => warn!("client crashed, {}", err),
+                tokio::spawn(
+                    async move {
+                        debug!("accepted");
+
+                        match process(stream).await {
+                            Ok(_) => debug!("closed"),
+                            Err(err) => warn!(%err, "exited"),
+                        }
                     }
-                });
+                    .instrument(info_span!("engine", %peer)),
+                );
             }
             Err(err) => {
-                warn!("accept failed: {:?}", err);
                 return Err(err.into());
             }
         }
@@ -81,11 +86,21 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-#[instrument]
 async fn process(stream: TcpStream) -> Result<()> {
     let mut conn = Connection::new(stream);
+    let mut state = State::default();
 
-    let frame = conn.read_frame().await?;
+    loop {
+        let frame = conn.read_frame().await?;
+        let (next, reply) = state.handle_frame(frame)?;
+        if let Some(frame) = reply {
+            conn.write_frame(frame).await?;
+        }
+        if next.is_disconnecting() {
+            break;
+        }
+        state = next;
+    }
 
     Ok(())
 }

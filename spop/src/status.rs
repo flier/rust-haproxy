@@ -23,7 +23,7 @@ pub enum Status {
     #[error("normal")]
     None = SPOE_FRM_ERR_NONE,
     #[error("I/O error")]
-    IO = SPOE_FRM_ERR_IO,
+    Io = SPOE_FRM_ERR_IO,
     #[error("a timeout occurred")]
     Timeout = SPOE_FRM_ERR_TOUT,
     #[error("frame is too big")]
