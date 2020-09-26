@@ -40,7 +40,9 @@ bitflags! {
     /// Flags set on the SPOE frame
     #[derive(Default)]
     pub struct Flags: u32 {
+        /// Indicates that this is the final payload fragment.
         const FIN = SPOE_FRM_FL_FIN;
+        /// Indicates that the processing of the current frame must be cancelled.
         const ABORT = SPOE_FRM_FL_ABRT;
     }
 }
@@ -63,8 +65,14 @@ impl Default for Metadata {
 }
 
 impl Metadata {
+    /// Indicates that this is a payload fragment.
     pub fn fragmented(&self) -> bool {
         !self.flags.contains(Flags::FIN)
+    }
+
+    /// Indicates that the processing of the current frame must be cancelled.
+    pub fn aborted(&self) -> bool {
+        self.flags.contains(Flags::ABORT)
     }
 
     pub fn size(&self) -> usize {
