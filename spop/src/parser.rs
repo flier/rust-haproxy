@@ -87,13 +87,27 @@ where
     Input::Range: Range + AsRef<[u8]>,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
+    let fragment_not_supported = |metadata: Metadata| {
+        if metadata.fragmented() {
+            Err(StreamErrorFor::<Input>::other(FragmentNotSupported))
+        } else {
+            Ok(metadata)
+        }
+    };
+
     choice((
         (token(SPOE_FRM_T_UNSET), metadata()).map(|_| Frame::Unset),
-        (token(SPOE_FRM_T_HAPROXY_HELLO), metadata())
+        (
+            token(SPOE_FRM_T_HAPROXY_HELLO),
+            metadata().and_then(fragment_not_supported),
+        )
             .with(haproxy_hello())
             .map(Frame::HaproxyHello)
             .expected("haproxy::hello"),
-        (token(SPOE_FRM_T_HAPROXY_DISCON), metadata())
+        (
+            token(SPOE_FRM_T_HAPROXY_DISCON),
+            metadata().and_then(fragment_not_supported),
+        )
             .with(disconnect())
             .map(haproxy::Disconnect)
             .map(Frame::HaproxyDisconnect)
@@ -103,11 +117,17 @@ where
             .then(haproxy_notify)
             .map(Frame::HaproxyNotify)
             .expected("haproxy::notify"),
-        (token(SPOE_FRM_T_AGENT_HELLO), metadata())
+        (
+            token(SPOE_FRM_T_AGENT_HELLO),
+            metadata().and_then(fragment_not_supported),
+        )
             .with(agent_hello())
             .map(Frame::AgentHello)
             .expected("agent::hello"),
-        (token(SPOE_FRM_T_AGENT_DISCON), metadata())
+        (
+            token(SPOE_FRM_T_AGENT_DISCON),
+            metadata().and_then(fragment_not_supported),
+        )
             .with(disconnect())
             .map(agent::Disconnect)
             .map(Frame::AgentDisconnect)
@@ -297,7 +317,7 @@ where
 
     struct_parser! {
         Notify {
-            fragmented: value(false),
+            fragmented: value(metadata.fragmented()),
             stream_id: value(metadata.stream_id),
             frame_id: value(metadata.frame_id),
             messages: many1::<Vec<_>, _, _>(message().expected("message")).expected("messages"),
@@ -331,7 +351,7 @@ where
 
     struct_parser! {
         Ack {
-            fragmented: value(false),
+            fragmented: value(metadata.fragmented()),
             stream_id: value(metadata.stream_id),
             frame_id: value(metadata.frame_id),
             actions: many1::<Vec<_>, _, _>(action()).expected("actions"),

@@ -45,14 +45,28 @@ bitflags! {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Metadata {
     pub flags: Flags,
     pub stream_id: u64,
     pub frame_id: u64,
 }
 
+impl Default for Metadata {
+    fn default() -> Self {
+        Metadata {
+            flags: Flags::FIN,
+            stream_id: 0,
+            frame_id: 0,
+        }
+    }
+}
+
 impl Metadata {
+    pub fn fragmented(&self) -> bool {
+        !self.flags.contains(Flags::FIN)
+    }
+
     pub fn size(&self) -> usize {
         mem::size_of::<Flags>() + varint::size_of(self.stream_id) + varint::size_of(self.frame_id)
     }
