@@ -6,7 +6,7 @@ This is a very simple program that can be used to replicate HTTP requests
 via the SPOP protocol.  All requests are replicated to the web address (URL)
 selected when running the program.
 */
-use anyhow::{Context, Result};
+use anyhow::Result;
 use structopt::StructOpt;
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -15,7 +15,7 @@ use tokio::{
 use tracing::{debug, info_span, warn};
 use tracing_futures::Instrument;
 
-use haproxy::{spoa::State, Connection};
+use haproxy::{spoa::State, Connection, Frame, Status};
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -92,14 +92,21 @@ async fn process(stream: TcpStream) -> Result<()> {
 
     loop {
         let frame = conn.read_frame().await?;
-        let (next, reply) = state.handle_frame(frame)?;
-        if let Some(frame) = reply {
-            conn.write_frame(frame).await?;
+        match state.handle_frame(frame) {
+            Ok((next, reply)) => {
+                if let Some(frame) = reply {
+                    conn.write_frame(frame).await?;
+                }
+                state = next;
+            }
+            Err(err) => {
+                let reason = err.to_string();
+                let status = err.downcast::<Status>().unwrap_or(Status::Unknonw);
+                let frame = Frame::agent_disconnect(status, reason);
+                conn.write_frame(frame).await?;
+                break;
+            }
         }
-        if next.is_disconnecting() {
-            break;
-        }
-        state = next;
     }
 
     Ok(())

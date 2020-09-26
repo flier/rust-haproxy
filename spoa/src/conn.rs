@@ -28,7 +28,7 @@ impl Connection {
         }
     }
 
-    #[instrument(err)]
+    #[instrument]
     pub async fn read_frame(&mut self) -> Result<Frame> {
         let frame_length = self.stream.read_u32().await.context("read frame length")? as usize;
         if frame_length > self.max_frame_size {
@@ -61,7 +61,7 @@ impl Connection {
         }
     }
 
-    #[instrument(err)]
+    #[instrument]
     pub async fn write_frame(&mut self, frame: Frame) -> Result<usize> {
         let frame_length = frame.size();
         let mut buf = BytesMut::with_capacity(Frame::LENGTH_SIZE + frame_length);

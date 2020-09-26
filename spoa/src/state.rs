@@ -2,7 +2,7 @@ use std::cmp;
 use std::collections::HashSet;
 use std::convert::TryInto;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use derive_more::{From, TryInto};
 use tracing::{debug, instrument, trace, warn};
 
@@ -13,7 +13,6 @@ use crate::spop::{agent, haproxy, Capability, Frame, Status, Version};
 pub enum State {
     Connecting(Connecting),
     Processing(Processing),
-    Disconnecting,
 }
 
 #[derive(Debug)]
@@ -45,36 +44,22 @@ impl Default for State {
 }
 
 impl State {
-    pub fn is_disconnecting(&self) -> bool {
-        match self {
-            State::Disconnecting => true,
-            _ => false,
-        }
-    }
-
     pub fn handle_frame(self, frame: Frame) -> Result<(State, Option<Frame>)> {
         match self {
             State::Connecting(connecting) => {
                 if let Ok(Frame::HaproxyHello(hello)) = frame.try_into() {
                     connecting.handshake(hello)
                 } else {
-                    Ok((
-                        State::Disconnecting,
-                        Some(Frame::agent_disconnect(
-                            Status::None,
-                            "expected HAPROXY-HELLO frame",
-                        )),
-                    ))
+                    Err(Status::Invalid).context("expected HAPROXY-HELLO frame")
                 }
             }
             State::Processing(processing) => processing.handle_frame(frame),
-            State::Disconnecting => Ok((self, None)),
         }
     }
 }
 
 impl Connecting {
-    #[instrument(err)]
+    #[instrument]
     fn handshake(mut self, mut hello: haproxy::Hello) -> Result<(State, Option<Frame>)> {
         hello.supported_versions.sort();
         self.supported_versions.sort();
@@ -96,57 +81,42 @@ impl Connecting {
 
         debug!(%version, %max_frame_size, capabilities = ?capabilities.as_slice(), "handshaked");
 
-        let next = if hello.healthcheck {
-            State::Disconnecting
-        } else {
-            Processing {
-                version,
-                max_frame_size,
-                capabilities: capabilities.clone(),
-            }
-            .into()
-        };
-        let frame = Some(
-            agent::Hello {
-                version,
-                max_frame_size,
-                capabilities,
-            }
-            .into(),
-        );
+        if hello.healthcheck {
+            return Err(Status::None).context("healthcheck");
+        }
 
-        Ok((next, frame))
+        let next = Processing {
+            version,
+            max_frame_size,
+            capabilities: capabilities.clone(),
+        }
+        .into();
+
+        let frame = agent::Hello {
+            version,
+            max_frame_size,
+            capabilities,
+        }
+        .into();
+
+        Ok((next, Some(frame)))
     }
 }
 
 impl Processing {
-    #[instrument(err)]
+    #[instrument]
     fn handle_frame(mut self, frame: Frame) -> Result<(State, Option<Frame>)> {
         match frame {
             Frame::HaproxyDisconnect(haproxy::Disconnect(disconnect)) => {
                 trace!(?disconnect, "peer closed connection");
 
-                self.disconnect(Status::None, "peer closed connection")
+                Err(Status::None).context("peer closed connection")
             }
             _ => {
                 warn!(?frame, "unexpected frame");
 
-                self.disconnect(
-                    Status::Invalid,
-                    format!("unexpected frame: {}", frame.frame_type()),
-                )
+                Err(Status::Invalid).context("unexpected frame")
             }
         }
-    }
-
-    fn disconnect<S: Into<String>>(
-        mut self,
-        status: Status,
-        reason: S,
-    ) -> Result<(State, Option<Frame>)> {
-        Ok((
-            State::Disconnecting,
-            Some(Frame::agent_disconnect(status, reason).into()),
-        ))
     }
 }
