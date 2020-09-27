@@ -13,6 +13,18 @@ use tokio::{
 
 use crate::spop::{agent, haproxy, Action, Data, FrameId, Message, Scope, StreamId};
 
+pub fn process_messages() -> (Processor, Messages) {
+    let (processing, messages) = unbounded_channel();
+
+    (
+        Processor {
+            processing,
+            receiving: HashMap::new(),
+        },
+        Messages(messages),
+    )
+}
+
 pub struct Processor {
     processing: UnboundedSender<(Acker, UnboundedReceiver<Message>)>,
     receiving: HashMap<(StreamId, FrameId), UnboundedSender<Message>>,
