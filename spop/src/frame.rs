@@ -343,6 +343,16 @@ pub mod agent {
     }
 
     impl Ack {
+        pub fn new(stream_id: StreamId, frame_id: FrameId) -> Self {
+            Ack {
+                fragmented: false,
+                aborted: false,
+                stream_id,
+                frame_id,
+                actions: vec![],
+            }
+        }
+
         pub fn metadata(&self) -> Metadata {
             Metadata {
                 flags: if self.fragmented {

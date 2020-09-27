@@ -6,7 +6,7 @@ use tokio::{
 };
 
 use crate::spop::{Message, StreamId};
-use crate::{Acker, Connection, Messages};
+use crate::{Acker, Connection};
 
 #[derive(Debug)]
 pub struct Agent {
@@ -21,8 +21,4 @@ pub struct Engine {
     connections: HashMap<StreamId, Connection>,
 }
 
-impl Agent {
-    pub fn messages(self) -> Messages {
-        Messages(self.receiver)
-    }
-}
+impl Agent {}

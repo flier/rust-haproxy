@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use derive_more::{From, TryInto};
+use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::handshake::{Handshaked, Handshaking};
@@ -23,7 +24,8 @@ pub struct Connecting {
 #[derive(Clone, Debug)]
 pub struct Processing {
     pub handshaked: Handshaked,
-    pub messages: Arc<Mutex<HashMap<(StreamId, FrameId), Vec<Message>>>>,
+    // pub ack_sender: UnboundedSender<(Acker, UnboundedReceiver<Message>)>,
+    pub receiving_messages: Arc<Mutex<HashMap<(StreamId, FrameId), UnboundedSender<Message>>>>,
 }
 
 impl Default for State {
@@ -63,7 +65,7 @@ impl Connecting {
             let frame = handshaked.agent_hello().into();
             let next = Processing {
                 handshaked,
-                messages: Arc::new(Mutex::new(HashMap::new())),
+                receiving_messages: Arc::new(Mutex::new(HashMap::new())),
             }
             .into();
 
@@ -81,21 +83,7 @@ impl Processing {
 
                 Err(Status::None).context("peer closed connection")
             }
-            Frame::HaproxyNotify(haproxy::Notify {
-                fragmented,
-                stream_id,
-                frame_id,
-                messages,
-            }) => {
-                self.messages
-                    .lock()
-                    .expect("messages")
-                    .entry((stream_id, frame_id))
-                    .or_insert_with(Vec::new)
-                    .extend(messages.into_iter());
-
-                Ok((self.into(), if fragmented { None } else { None }))
-            }
+            Frame::HaproxyNotify(notify) => Ok((self.into(), None)),
             _ => {
                 warn!(?frame, "unexpected frame");
 

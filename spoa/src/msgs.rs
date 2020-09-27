@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -5,18 +6,64 @@ use anyhow::{anyhow, bail, Result};
 use tokio::{
     stream::Stream,
     sync::{
-        mpsc::{error::TryRecvError::*, UnboundedReceiver},
-        oneshot::Sender,
+        mpsc::{error::TryRecvError::*, unbounded_channel, UnboundedReceiver, UnboundedSender},
+        oneshot,
     },
 };
 
-use crate::spop::{agent, Action, Data, Message, Scope};
+use crate::spop::{agent, haproxy, Action, Data, FrameId, Message, Scope, StreamId};
+
+pub struct Processor {
+    processing: UnboundedSender<(Acker, UnboundedReceiver<Message>)>,
+    receiving: HashMap<(StreamId, FrameId), UnboundedSender<Message>>,
+}
+
+impl Processor {
+    pub async fn recieve_messages(
+        &mut self,
+        notify: haproxy::Notify,
+    ) -> Result<Option<oneshot::Receiver<agent::Ack>>> {
+        let key = (notify.stream_id, notify.frame_id);
+        let (sender, acked) = {
+            if self.receiving.contains_key(&key) {
+                let sender = if notify.fragmented {
+                    self.receiving.get(&key).cloned()
+                } else {
+                    self.receiving.remove(&key)
+                }
+                .expect("sender");
+
+                (sender, None)
+            } else {
+                let (sender, receiver) = unbounded_channel();
+
+                if notify.fragmented {
+                    self.receiving.insert(key, sender.clone());
+                }
+
+                let (acker, acked) = Acker::new(notify.stream_id, notify.frame_id);
+
+                self.processing.send((acker, receiver))?;
+
+                (sender, Some(acked))
+            }
+        };
+
+        for msg in notify.messages {
+            if sender.send(msg).is_err() {
+                break;
+            }
+        }
+
+        Ok(acked)
+    }
+}
 
 #[derive(Debug)]
-pub struct Messages(pub UnboundedReceiver<(Acker, Message)>);
+pub struct Messages(pub UnboundedReceiver<(Acker, UnboundedReceiver<Message>)>);
 
 impl Stream for Messages {
-    type Item = (Acker, Message);
+    type Item = (Acker, UnboundedReceiver<Message>);
 
     fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Self::Item>> {
         match self.0.try_recv() {
@@ -31,7 +78,7 @@ impl Stream for Messages {
 pub struct Acker(Option<Inner>);
 
 #[derive(Debug)]
-struct Inner(agent::Ack, Sender<agent::Ack>);
+struct Inner(agent::Ack, oneshot::Sender<agent::Ack>);
 
 impl Drop for Acker {
     fn drop(&mut self) {
@@ -40,6 +87,14 @@ impl Drop for Acker {
 }
 
 impl Acker {
+    pub fn new(stream_id: StreamId, frame_id: FrameId) -> (Self, oneshot::Receiver<agent::Ack>) {
+        let (sender, receiver) = oneshot::channel();
+        (
+            Acker(Some(Inner(agent::Ack::new(stream_id, frame_id), sender))),
+            receiver,
+        )
+    }
+
     pub fn complete(&mut self) -> Result<()> {
         if let Some(Inner(ack, sender)) = self.0.take() {
             sender.send(ack).map_err(|_| anyhow!("receiver closed"))
