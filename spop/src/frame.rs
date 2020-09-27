@@ -226,13 +226,15 @@ impl Disconnect {
 }
 
 pub mod haproxy {
+    use derive_more::{Deref, DerefMut, From, Into};
+
     use super::*;
     use crate::{
         frame::{Flags, Metadata},
         Capability, Message, Version,
     };
 
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq, Deref, DerefMut, From, Into)]
     pub struct Disconnect(pub super::Disconnect);
 
     /// This frame is the first one exchanged between HAProxy and an agent, when the connection is established.
@@ -280,7 +282,11 @@ pub mod haproxy {
     impl Notify {
         pub fn metadata(&self) -> Metadata {
             Metadata {
-                flags: Flags::default(),
+                flags: if self.fragmented {
+                    Flags::empty()
+                } else {
+                    Flags::FIN
+                },
                 stream_id: self.stream_id,
                 frame_id: self.frame_id,
             }
@@ -293,13 +299,15 @@ pub mod haproxy {
 }
 
 pub mod agent {
+    use derive_more::{Deref, DerefMut, From, Into};
+
     use super::*;
     use crate::{
         frame::{Flags, Metadata},
         Action, Capability, Version,
     };
 
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq, Deref, DerefMut, From, Into)]
     pub struct Disconnect(pub super::Disconnect);
 
     /// This frame is sent in reply to a HAPROXY-HELLO frame to finish a HELLO handshake.
@@ -325,6 +333,7 @@ pub mod agent {
     #[derive(Clone, Debug, PartialEq)]
     pub struct Ack {
         pub fragmented: bool,
+        pub aborted: bool,
         pub stream_id: u64,
         pub frame_id: u64,
         pub actions: Vec<Action>,
@@ -333,7 +342,15 @@ pub mod agent {
     impl Ack {
         pub fn metadata(&self) -> Metadata {
             Metadata {
-                flags: Flags::default(),
+                flags: if self.fragmented {
+                    Flags::empty()
+                } else {
+                    Flags::FIN
+                } | if self.aborted {
+                    Flags::ABORT
+                } else {
+                    Flags::empty()
+                },
                 stream_id: self.stream_id,
                 frame_id: self.frame_id,
             }

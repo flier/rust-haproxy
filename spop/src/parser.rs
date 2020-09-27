@@ -352,6 +352,7 @@ where
     struct_parser! {
         Ack {
             fragmented: value(metadata.fragmented()),
+            aborted: value(metadata.aborted()),
             stream_id: value(metadata.stream_id),
             frame_id: value(metadata.frame_id),
             actions: many1::<Vec<_>, _, _>(action()).expected("actions"),
@@ -701,7 +702,7 @@ mod tests {
             ),
             (
                 Frame::HaproxyNotify(haproxy::Notify {
-                    fragmented: false,
+                    fragmented: true,
                     stream_id: 123,
                     frame_id: 456,
                     messages: vec![
@@ -724,7 +725,7 @@ mod tests {
                 {
                     let mut v = vec![SPOE_FRM_T_HAPROXY_NOTIFY];
                     v.put_metadata(Metadata {
-                        flags: Flags::default(),
+                        flags: Flags::empty(),
                         stream_id: 123,
                         frame_id: 456,
                     });
@@ -745,6 +746,7 @@ mod tests {
             (
                 Frame::AgentAck(agent::Ack {
                     fragmented: false,
+                    aborted: true,
                     stream_id: 123,
                     frame_id: 456,
                     actions: vec![
@@ -762,7 +764,7 @@ mod tests {
                 {
                     let mut v = vec![SPOE_FRM_T_AGENT_ACK];
                     v.put_metadata(Metadata {
-                        flags: Flags::default(),
+                        flags: Flags::FIN | Flags::ABORT,
                         stream_id: 123,
                         frame_id: 456,
                     });
@@ -777,10 +779,13 @@ mod tests {
                 }
             ),
             (
-                Frame::HaproxyDisconnect(Disconnect {
-                    status_code: Status::BadVersion as u32,
-                    message: "bad version".into()
-                }),
+                Frame::HaproxyDisconnect(
+                    Disconnect {
+                        status_code: Status::BadVersion as u32,
+                        message: "bad version".into()
+                    }
+                    .into()
+                ),
                 {
                     let mut v = vec![SPOE_FRM_T_HAPROXY_DISCON];
                     v.put_metadata(Metadata::default());
@@ -790,10 +795,13 @@ mod tests {
                 }
             ),
             (
-                Frame::AgentDisconnect(Disconnect {
-                    status_code: Status::BadFrameSize as u32,
-                    message: "bad frame size".into()
-                }),
+                Frame::AgentDisconnect(
+                    Disconnect {
+                        status_code: Status::BadFrameSize as u32,
+                        message: "bad frame size".into()
+                    }
+                    .into()
+                ),
                 {
                     let mut v = vec![SPOE_FRM_T_AGENT_DISCON];
                     v.put_metadata(Metadata::default());
