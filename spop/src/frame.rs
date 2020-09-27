@@ -36,6 +36,9 @@ pub const HEALTHCHECK_KEY: &str = "healthcheck";
 pub const STATUS_CODE_KEY: &str = "status-code";
 pub const MSG_KEY: &str = "message";
 
+pub type StreamId = u64;
+pub type FrameId = u64;
+
 bitflags! {
     /// Flags set on the SPOE frame
     #[derive(Default)]
@@ -50,8 +53,8 @@ bitflags! {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Metadata {
     pub flags: Flags,
-    pub stream_id: u64,
-    pub frame_id: u64,
+    pub stream_id: StreamId,
+    pub frame_id: FrameId,
 }
 
 impl Default for Metadata {
@@ -274,8 +277,8 @@ pub mod haproxy {
     #[derive(Clone, Debug, PartialEq)]
     pub struct Notify {
         pub fragmented: bool,
-        pub stream_id: u64,
-        pub frame_id: u64,
+        pub stream_id: StreamId,
+        pub frame_id: FrameId,
         pub messages: Vec<Message>,
     }
 
@@ -334,8 +337,8 @@ pub mod agent {
     pub struct Ack {
         pub fragmented: bool,
         pub aborted: bool,
-        pub stream_id: u64,
-        pub frame_id: u64,
+        pub stream_id: StreamId,
+        pub frame_id: FrameId,
         pub actions: Vec<Action>,
     }
 

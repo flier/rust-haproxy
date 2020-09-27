@@ -7,7 +7,7 @@ use derive_more::{From, TryInto};
 use tracing::{debug, instrument, trace, warn};
 
 use crate::handshake::{Handshaked, Handshaking};
-use crate::spop::{haproxy, Frame, Message, Status};
+use crate::spop::{haproxy, Frame, FrameId, Message, Status, StreamId};
 
 #[derive(Clone, Debug, From, TryInto)]
 pub enum State {
@@ -23,7 +23,7 @@ pub struct Connecting {
 #[derive(Clone, Debug)]
 pub struct Processing {
     pub handshaked: Handshaked,
-    pub messages: Arc<Mutex<HashMap<(u64, u64), Vec<Message>>>>,
+    pub messages: Arc<Mutex<HashMap<(StreamId, FrameId), Vec<Message>>>>,
 }
 
 impl Default for State {
