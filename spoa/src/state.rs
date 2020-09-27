@@ -1,6 +1,4 @@
-use std::cmp;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::convert::TryInto;
 use std::sync::{Arc, Mutex};
 
@@ -8,40 +6,30 @@ use anyhow::{Context, Result};
 use derive_more::{From, TryInto};
 use tracing::{debug, instrument, trace, warn};
 
-use crate::conn::MAX_FRAME_SIZE;
-use crate::spop::{agent, haproxy, Capability, Frame, Message, Status, Version};
+use crate::handshake::{Handshaked, Handshaking};
+use crate::spop::{haproxy, Frame, Message, Status};
 
-#[derive(Debug, From, TryInto)]
+#[derive(Clone, Debug, From, TryInto)]
 pub enum State {
     Connecting(Connecting),
     Processing(Processing),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Connecting {
-    pub supported_versions: Vec<Version>,
-    pub max_frame_size: u32,
-    pub capabilities: Vec<Capability>,
+    pub handshaking: Handshaking,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Processing {
-    pub version: Version,
-    pub max_frame_size: u32,
-    pub capabilities: Vec<Capability>,
+    pub handshaked: Handshaked,
     pub messages: Arc<Mutex<HashMap<(u64, u64), Vec<Message>>>>,
 }
 
 impl Default for State {
     fn default() -> Self {
         State::Connecting(Connecting {
-            supported_versions: vec![Version::default()],
-            max_frame_size: MAX_FRAME_SIZE as u32,
-            capabilities: vec![
-                Capability::Fragmentation,
-                Capability::Async,
-                Capability::Pipelining,
-            ],
+            handshaking: Handshaking::default(),
         })
     }
 }
@@ -63,53 +51,30 @@ impl State {
 
 impl Connecting {
     #[instrument]
-    fn handshake(mut self, mut hello: haproxy::Hello) -> Result<(State, Option<Frame>)> {
-        hello.supported_versions.sort();
-        self.supported_versions.sort();
+    fn handshake(self, hello: haproxy::Hello) -> Result<(State, Option<Frame>)> {
+        let healthcheck = hello.healthcheck;
+        let handshaked = self.handshaking.handshake(hello)?;
 
-        let version = hello
-            .supported_versions
-            .into_iter()
-            .rev()
-            .find(|version| self.supported_versions.iter().any(|v| v == version))
-            .ok_or_else(|| Status::NoVersion)?;
-        let max_frame_size = cmp::min(hello.max_frame_size, self.max_frame_size);
-        let capabilities = hello
-            .capabilities
-            .into_iter()
-            .collect::<HashSet<_>>()
-            .intersection(&self.capabilities.into_iter().collect::<HashSet<_>>())
-            .cloned()
-            .collect::<Vec<_>>();
+        debug!(?handshaked, "handshaked");
 
-        debug!(%version, %max_frame_size, capabilities = ?capabilities.as_slice(), "handshaked");
+        if healthcheck {
+            Err(Status::None).context("healthcheck")
+        } else {
+            let frame = handshaked.agent_hello().into();
+            let next = Processing {
+                handshaked,
+                messages: Arc::new(Mutex::new(HashMap::new())),
+            }
+            .into();
 
-        if hello.healthcheck {
-            return Err(Status::None).context("healthcheck");
+            Ok((next, Some(frame)))
         }
-
-        let next = Processing {
-            version,
-            max_frame_size,
-            capabilities: capabilities.clone(),
-            messages: Arc::new(Mutex::new(HashMap::new())),
-        }
-        .into();
-
-        let frame = agent::Hello {
-            version,
-            max_frame_size,
-            capabilities,
-        }
-        .into();
-
-        Ok((next, Some(frame)))
     }
 }
 
 impl Processing {
     #[instrument]
-    fn handle_frame(mut self, frame: Frame) -> Result<(State, Option<Frame>)> {
+    fn handle_frame(self, frame: Frame) -> Result<(State, Option<Frame>)> {
         match frame {
             Frame::HaproxyDisconnect(haproxy::Disconnect(disconnect)) => {
                 trace!(?disconnect, "peer closed connection");
