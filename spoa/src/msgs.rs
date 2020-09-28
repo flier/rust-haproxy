@@ -3,6 +3,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{anyhow, bail, Result};
+use derive_more::{From, Into};
 use tokio::{
     stream::Stream,
     sync::{
@@ -13,25 +14,26 @@ use tokio::{
 
 use crate::spop::{agent, haproxy, Action, Data, FrameId, Message, Scope, StreamId};
 
-pub fn process_messages() -> (Processor, Messages) {
+pub fn processing_messages() -> (Dispatcher, Processor) {
     let (processing, messages) = unbounded_channel();
 
     (
-        Processor {
+        Dispatcher {
             processing,
             receiving: HashMap::new(),
         },
-        Messages(messages),
+        Processor(messages),
     )
 }
 
-pub struct Processor {
+#[derive(Debug, Clone)]
+pub struct Dispatcher {
     processing: UnboundedSender<(Acker, UnboundedReceiver<Message>)>,
     receiving: HashMap<(StreamId, FrameId), UnboundedSender<Message>>,
 }
 
-impl Processor {
-    pub async fn recieve_messages(
+impl Dispatcher {
+    pub fn recieve_messages(
         &mut self,
         notify: haproxy::Notify,
     ) -> Result<Option<oneshot::Receiver<agent::Ack>>> {
@@ -71,11 +73,26 @@ impl Processor {
     }
 }
 
-#[derive(Debug)]
-pub struct Messages(pub UnboundedReceiver<(Acker, UnboundedReceiver<Message>)>);
+#[derive(Debug, From, Into)]
+pub struct Processor(pub UnboundedReceiver<(Acker, UnboundedReceiver<Message>)>);
+
+impl Stream for Processor {
+    type Item = (Acker, Messages);
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Self::Item>> {
+        match self.0.try_recv() {
+            Ok((acker, receiver)) => Poll::Ready(Some((acker, Messages(receiver)))),
+            Err(Empty) => Poll::Pending,
+            Err(Closed) => Poll::Ready(None),
+        }
+    }
+}
+
+#[derive(Debug, From, Into)]
+pub struct Messages(UnboundedReceiver<Message>);
 
 impl Stream for Messages {
-    type Item = (Acker, UnboundedReceiver<Message>);
+    type Item = Message;
 
     fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Self::Item>> {
         match self.0.try_recv() {

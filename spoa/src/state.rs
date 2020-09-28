@@ -1,31 +1,31 @@
-use std::collections::HashMap;
 use std::convert::TryInto;
-use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use derive_more::{From, TryInto};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::handshake::{Handshaked, Handshaking};
-use crate::spop::{haproxy, Frame, FrameId, Message, Status, StreamId};
+use crate::msgs::{processing_messages, Dispatcher, Processor};
+use crate::spop::{agent, haproxy, Frame, Status};
 
-#[derive(Clone, Debug, From, TryInto)]
+#[derive(Debug, From, TryInto)]
 pub enum State {
     Connecting(Connecting),
     Processing(Processing),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Connecting {
     pub handshaking: Handshaking,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Processing {
     pub handshaked: Handshaked,
-    // pub ack_sender: UnboundedSender<(Acker, UnboundedReceiver<Message>)>,
-    pub receiving_messages: Arc<Mutex<HashMap<(StreamId, FrameId), UnboundedSender<Message>>>>,
+    pub dispatcher: Dispatcher,
+    pub processor: Processor,
+    pub pending_acks: Vec<oneshot::Receiver<agent::Ack>>,
 }
 
 impl Default for State {
@@ -63,9 +63,12 @@ impl Connecting {
             Err(Status::None).context("healthcheck")
         } else {
             let frame = handshaked.agent_hello().into();
+            let (dispatcher, processor) = processing_messages();
             let next = Processing {
                 handshaked,
-                receiving_messages: Arc::new(Mutex::new(HashMap::new())),
+                dispatcher,
+                processor,
+                pending_acks: vec![],
             }
             .into();
 
@@ -76,14 +79,20 @@ impl Connecting {
 
 impl Processing {
     #[instrument]
-    fn handle_frame(self, frame: Frame) -> Result<(State, Option<Frame>)> {
+    fn handle_frame(mut self, frame: Frame) -> Result<(State, Option<Frame>)> {
         match frame {
             Frame::HaproxyDisconnect(haproxy::Disconnect(disconnect)) => {
                 trace!(?disconnect, "peer closed connection");
 
                 Err(Status::None).context("peer closed connection")
             }
-            Frame::HaproxyNotify(notify) => Ok((self.into(), None)),
+            Frame::HaproxyNotify(notify) => {
+                if let Some(ack) = self.dispatcher.recieve_messages(notify)? {
+                    self.pending_acks.push(ack);
+                }
+
+                Ok((self.into(), None))
+            }
             _ => {
                 warn!(?frame, "unexpected frame");
 
