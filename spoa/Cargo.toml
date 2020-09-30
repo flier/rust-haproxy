@@ -22,5 +22,7 @@ tracing-futures = "0.2"
 
 futures = { version = "0.3", features = ["async-await"] }
 tokio = { version = "0.2", features = ["full"] }
+tower-service = "0.3"
+pin-project = "0.4"
 
 haproxy-spop = { version = "0.1", path = "../spop" }

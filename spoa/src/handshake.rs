@@ -3,7 +3,7 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 
-use crate::conn::MAX_FRAME_SIZE;
+use crate::proto::MAX_FRAME_SIZE;
 use crate::spop::{agent, haproxy, Capability, Status, Version};
 
 #[derive(Clone, Debug, PartialEq)]

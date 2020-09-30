@@ -3,7 +3,7 @@ use std::convert::TryInto;
 use anyhow::{Context, Result};
 use derive_more::{From, TryInto};
 use tokio::sync::oneshot;
-use tracing::{debug, instrument, trace, warn};
+use tracing::instrument;
 
 use crate::handshake::{Handshaked, Handshaking};
 use crate::msgs::{processing_messages, Dispatcher, Processor};

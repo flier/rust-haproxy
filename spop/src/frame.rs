@@ -144,7 +144,7 @@ impl Frame {
 }
 
 /// SPOP version supported by HAProxy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Display)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Display)]
 #[display(fmt = "{}.{}", major, minor)]
 pub struct Version {
     pub major: usize,

@@ -2,15 +2,16 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Error, Result};
 use futures::ready;
+use pin_project::pin_project;
 use tokio::net::{TcpListener, ToSocketAddrs};
-use tracing::debug;
 
 use crate::{
-    msgs::{processing_messages, Dispatcher, Processor},
+    msgs::{processing_messages, Dispatcher, Messages, Processor},
+    service::MakeServiceRef,
     spop::{Frame, Status},
-    Connection, State,
+    Acker, Connection, State,
 };
 
 #[derive(Debug)]
@@ -25,24 +26,32 @@ impl Agent {
         Ok(Agent { listener })
     }
 
-    pub async fn serve(self) -> Serve {
+    pub fn serve<S, B>(self, new_service: S) -> Serve<S> {
         let (dispatcher, processor) = processing_messages();
 
         Serve {
             listener: self.listener,
+            new_service,
             dispatcher,
             processor,
         }
     }
 }
 
-pub struct Serve {
+#[pin_project]
+#[derive(Debug)]
+pub struct Serve<S> {
+    #[pin]
     listener: TcpListener,
+    new_service: S,
     dispatcher: Dispatcher,
     processor: Processor,
 }
 
-impl Future for Serve {
+impl<S> Future for Serve<S>
+where
+    S: MakeServiceRef<Connection, (Acker, Messages), Error = Error>,
+{
     type Output = Result<()>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {

@@ -1,15 +1,16 @@
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use bytes::{BufMut, BytesMut};
 use hexplay::HexViewBuilder;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
-use tracing::{debug, instrument, trace};
+use tracing::instrument;
 
-use crate::spop::{BufMutExt, Frame, Status};
-
-pub const MAX_FRAME_SIZE: usize = 16384;
+use crate::{
+    proto::MAX_FRAME_SIZE,
+    spop::{BufMutExt, Frame, Status},
+};
 
 #[derive(Debug)]
 pub struct Connection {
