@@ -12,12 +12,12 @@ By extension, these servers can also be called agents.
 """
 
 [dependencies]
-anyhow.workspace = true
 bytes.workspace = true
 derive_more.workspace = true
 futures.workspace = true
 hexplay.workspace = true
 pin-project.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tower-service.workspace = true
 tracing-futures.workspace = true

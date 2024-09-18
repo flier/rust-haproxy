@@ -6,6 +6,7 @@ pub use haproxy_spop as spop;
 mod accept;
 mod agent;
 mod conn;
+mod error;
 mod handshake;
 mod msgs;
 mod proto;

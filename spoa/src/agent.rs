@@ -2,12 +2,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use anyhow::{Context as _, Error, Result};
 use futures::ready;
 use pin_project::pin_project;
 use tokio::net::{TcpListener, ToSocketAddrs};
 
 use crate::{
+    error::{Context as _, Error, Result},
     msgs::{processing_messages, Dispatcher, Messages, Processor},
     service::MakeServiceRef,
     spop::{Error as Status, Frame},
@@ -50,19 +50,21 @@ pub struct Serve<S> {
 
 impl<S> Future for Serve<S>
 where
-    S: MakeServiceRef<Connection, (Acker, Messages), Error = Error>,
+    S: MakeServiceRef<Connection, (Acker, Messages), Error = Error> + Send,
 {
     type Output = Result<()>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        let me = self.project();
+
         loop {
-            match ready!(self.as_mut().listener.poll_accept(cx)) {
+            match ready!(me.listener.poll_accept(cx)) {
                 Ok((stream, peer)) => {
                     debug!(%peer, "connection accepted");
 
                     tokio::spawn(process_connection(
                         Connection::new(stream),
-                        self.dispatcher.clone(),
+                        me.dispatcher.clone(),
                     ));
                 }
                 Err(err) => return Poll::Ready(Err(err).context("accept failed")),
@@ -85,7 +87,7 @@ async fn process_connection(mut conn: Connection, dispatcher: Dispatcher) -> Res
             }
             Err(err) => {
                 let reason = err.to_string();
-                let status = err.downcast::<Status>().unwrap_or(Status::Unknown);
+                let status = err.status().unwrap_or(Status::Unknown);
                 let frame = Frame::agent_disconnect(status, reason);
                 conn.write_frame(frame).await?;
                 break;

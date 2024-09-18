@@ -4,14 +4,16 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use anyhow::{Context as _, Result};
 use futures::ready;
 use pin_project::pin_project;
 
-use crate::accept::Accept;
-use crate::msgs::{Acker, Messages};
-use crate::service::MakeServiceRef;
-use crate::spop::{Capability, Version};
+use crate::{
+    accept::Accept,
+    error::{Context as _, Result},
+    msgs::{Acker, Messages},
+    service::MakeServiceRef,
+    spop::{Capability, Version},
+};
 
 pub const MAX_FRAME_SIZE: usize = 16384;
 

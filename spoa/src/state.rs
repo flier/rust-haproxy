@@ -1,11 +1,13 @@
-use anyhow::{Context, Result};
 use derive_more::From;
 use tokio::sync::oneshot;
 use tracing::instrument;
 
-use crate::handshake::{Handshaked, Handshaking};
-use crate::msgs::{processing_messages, Dispatcher, Processor};
-use crate::spop::{AgentAck, Error, Frame, HaproxyHello};
+use crate::{
+    error::{Context, Result},
+    handshake::{Handshaked, Handshaking},
+    msgs::{processing_messages, Dispatcher, Processor},
+    spop::{AgentAck, Error, Frame, HaproxyHello},
+};
 
 #[derive(Debug, From)]
 pub enum State {

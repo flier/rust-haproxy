@@ -6,9 +6,9 @@ pub type Result<T> = StdResult<T, Error>;
 
 /// Errors triggered by SPOE applet
 #[repr(u32)]
-#[derive(Clone, Copy, Debug, PartialEq, Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum Error {
-    /// normal
+    /// normal    
     #[error("normal")]
     Normal,
     /// I/O error

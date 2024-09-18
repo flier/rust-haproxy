@@ -4,12 +4,12 @@ use std::net::TcpListener as StdTcpListener;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use anyhow::Result;
 use pin_project::pin_project;
 use tokio::net::ToSocketAddrs;
 
 use crate::{
     accept::Accept,
+    error::Result,
     msgs::{Acker, Messages},
     proto::{Protocol, SpawnAll},
     service::MakeServiceRef,
@@ -61,7 +61,9 @@ where
     type Output = Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        self.project().spawn_all.poll(cx)
+        let me = self.project();
+
+        me.spawn_all.poll(cx)
     }
 }
 

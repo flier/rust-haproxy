@@ -18,7 +18,7 @@ use tokio::{
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::{debug, info, instrument};
 
-use haproxy::{spoa::State, Connection, Frame, Error};
+use haproxy::{spoa::State, Connection, Error, Frame};
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -122,7 +122,7 @@ async fn process(stream: TcpStream, token: CancellationToken) -> Result<()> {
                     }
                     Err(err) => {
                         let reason = err.to_string();
-                        let status = err.downcast::<Error>().unwrap_or(Error::Unknown);
+                        let status = err.status().unwrap_or(Error::Unknown);
                         let disconnect = Frame::agent_disconnect(status, reason);
                         conn.write_frame(disconnect).await?;
                         break;

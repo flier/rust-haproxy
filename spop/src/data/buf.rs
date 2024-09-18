@@ -63,7 +63,7 @@ fn typed_data<B: Buf>(mut buf: B) -> Option<Typed> {
 
     match ty {
         Type::Null => Some(Typed::Null),
-        Type::Boolean => Some(flags.contains(Flags::TRUE)).map(Typed::Boolean),
+        Type::Boolean => Some(Typed::Boolean(flags.contains(Flags::TRUE))),
         Type::Int32 => buf.varint().map(|n| n as i32).map(Typed::Int32),
         Type::Uint32 => buf.varint().map(|n| n as u32).map(Typed::Uint32),
         Type::Int64 => buf.varint().map(|n| n as i64).map(Typed::Int64),

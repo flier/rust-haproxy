@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use anyhow::{anyhow, bail, Result};
 use derive_more::{From, Into};
 use futures::Stream;
 use tokio::sync::{
@@ -11,7 +10,10 @@ use tokio::sync::{
     oneshot,
 };
 
-use crate::spop::{Action, AgentAck, FrameId, HaproxyNotify, Message, Scope, StreamId, Typed};
+use crate::{
+    error::{Error::Closed, Result},
+    spop::{Action, AgentAck, FrameId, HaproxyNotify, Message, Scope, StreamId, Typed},
+};
 
 pub fn processing_messages() -> (Dispatcher, Processor) {
     let (processing, messages) = unbounded_channel();
@@ -82,7 +84,7 @@ impl Stream for Processor {
         match self.0.try_recv() {
             Ok((acker, receiver)) => Poll::Ready(Some((acker, Messages(receiver)))),
             Err(Empty) => Poll::Pending,
-            Err(Closed) => Poll::Ready(None),
+            Err(Disconnected) => Poll::Ready(None),
         }
     }
 }
@@ -97,7 +99,7 @@ impl Stream for Messages {
         match self.0.try_recv() {
             Ok(res) => Poll::Ready(Some(res)),
             Err(Empty) => Poll::Pending,
-            Err(Closed) => Poll::Ready(None),
+            Err(Disconnected) => Poll::Ready(None),
         }
     }
 }
@@ -125,18 +127,18 @@ impl Acker {
 
     pub fn complete(&mut self) -> Result<()> {
         if let Some(Inner(ack, sender)) = self.0.take() {
-            sender.send(ack).map_err(|_| anyhow!("receiver closed"))
+            sender.send(ack).map_err(|_| Closed)
         } else {
-            bail!("already closed")
+            Err(Closed)
         }
     }
 
     pub fn abort(&mut self) -> Result<()> {
         if let Some(Inner(mut ack, sender)) = self.0.take() {
             ack.aborted = true;
-            sender.send(ack).map_err(|_| anyhow!("receiver closed"))
+            sender.send(ack).map_err(|_| Closed)
         } else {
-            bail!("already closed")
+            Err(Closed)
         }
     }
 

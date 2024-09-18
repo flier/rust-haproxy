@@ -1,8 +1,9 @@
 use std::net::TcpListener as StdTcpListener;
 
-use anyhow::Result;
 use derive_more::{Deref, From, Into};
 use tokio::net::{TcpListener, ToSocketAddrs};
+
+use crate::error::Result;
 
 #[derive(Debug, Deref, From, Into)]
 pub struct Incoming {

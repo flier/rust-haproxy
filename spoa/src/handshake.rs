@@ -1,11 +1,9 @@
 use std::cmp;
 use std::collections::HashSet;
 
-use anyhow::Result;
-
 use crate::{
     proto::MAX_FRAME_SIZE,
-    spop::{AgentHello, Capability, Error::NoVersion, HaproxyHello, Version},
+    spop::{AgentHello, Capability, Error, Error::NoVersion, HaproxyHello, Version},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,7 +28,7 @@ impl Default for Handshaking {
 }
 
 impl Handshaking {
-    pub fn handshake(mut self, mut hello: HaproxyHello) -> Result<Handshaked> {
+    pub fn handshake(mut self, mut hello: HaproxyHello) -> Result<Handshaked, Error> {
         hello.supported_versions.sort();
         self.supported_versions.sort();
 
