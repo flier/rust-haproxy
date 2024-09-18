@@ -36,7 +36,7 @@ impl Handshaking {
             .supported_versions
             .into_iter()
             .rev()
-            .find(|version| self.supported_versions.iter().any(|v| v == version))
+            .find(|version| self.supported_versions.iter().rev().any(|v| v == version))
             .ok_or(NoVersion)?;
         let max_frame_size = cmp::min(hello.max_frame_size, self.max_frame_size);
         let capabilities = hello

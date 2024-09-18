@@ -1,6 +1,7 @@
 pub mod agent;
 mod buf;
 mod disconnect;
+mod framer;
 mod frames;
 pub mod haproxy;
 mod kv;
@@ -10,6 +11,7 @@ mod ty;
 
 pub use self::buf::{parse_frame, put_frame};
 pub use self::disconnect::Disconnect;
+pub use self::framer::Framer;
 pub use self::frames::Frame;
 pub use self::metadata::{Flags, FrameId, Metadata, StreamId};
 pub use self::msg::Message;

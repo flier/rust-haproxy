@@ -16,7 +16,7 @@ use tokio::{
     select, signal,
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use tracing::{debug, info, instrument};
+use tracing::{debug, instrument};
 
 use haproxy::{spoa::State, Connection, Error, Frame};
 
@@ -61,11 +61,11 @@ pub async fn main() -> Result<()> {
     select! {
         _ = serve((opt.address.as_str(), opt.port), token.clone(), tracker.clone()) => {}
         _ = signal::ctrl_c() => {
-            tracker.close();
             token.cancel();
         }
     };
 
+    tracker.close();
     tracker.wait().await;
 
     Ok(())
@@ -85,10 +85,8 @@ async fn serve<A: ToSocketAddrs + fmt::Debug>(
         select! {
             _ = tok.cancelled() => { break }
             _ = async {
-                let (stream, peer) = listener.accept().await?;
+                let (stream, _) = listener.accept().await?;
                 let tok = token.clone();
-
-                info!(?peer, "new connection established");
 
                 tracker.spawn(async move { process(stream, tok).await });
 
@@ -100,7 +98,17 @@ async fn serve<A: ToSocketAddrs + fmt::Debug>(
     Ok(())
 }
 
-#[instrument(skip_all, fields(?task = tokio::task::id(), ?local = stream.local_addr().unwrap(), ?peer = stream.peer_addr().unwrap()), ret, err)]
+#[instrument(
+    skip_all, 
+    fields(
+        ?task = tokio::task::id(), 
+        ?local = stream.local_addr().unwrap(), 
+        ?peer = stream.peer_addr().unwrap()
+    ), 
+    ret, 
+    err,
+    level = "trace"
+)]
 async fn process(stream: TcpStream, token: CancellationToken) -> Result<()> {
     let mut conn = Connection::new(stream);
     let mut state = State::default();
@@ -108,8 +116,8 @@ async fn process(stream: TcpStream, token: CancellationToken) -> Result<()> {
     loop {
         select! {
             _ = token.cancelled() => {
-                let disconnect = Frame::agent_disconnect(Error::Normal, "agent is shutting down");
-                conn.write_frame(disconnect).await?;
+                conn.disconnect(Error::Normal, "agent is shutting down").await?;
+
                 break
             }
             res = conn.read_frame() => {
@@ -121,10 +129,7 @@ async fn process(stream: TcpStream, token: CancellationToken) -> Result<()> {
                         state = next;
                     }
                     Err(err) => {
-                        let reason = err.to_string();
-                        let status = err.status().unwrap_or(Error::Unknown);
-                        let disconnect = Frame::agent_disconnect(status, reason);
-                        conn.write_frame(disconnect).await?;
+                        conn.disconnect(err.status().unwrap_or(Error::Unknown), err.to_string()).await?;
                         break;
                     }
                 }

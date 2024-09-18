@@ -13,7 +13,9 @@ This protocol is used by engines to talk to agents.
 bitflags.workspace = true
 bytes.workspace = true
 derive_more.workspace = true
+futures.workspace = true
 hexplay.workspace = true
 num_enum.workspace = true
 parse-display.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
