@@ -1,14 +1,17 @@
 mod action;
+mod caps;
 mod data;
+mod error;
 mod frame;
-mod parser;
-mod status;
-mod varint;
+mod version;
 
 pub use self::action::{Action, Scope};
-pub use self::data::Data;
+pub use self::caps::Capability;
+pub use self::data::Typed;
+pub use self::error::Error;
 pub use self::frame::{
-    agent, haproxy, BufMutExt, Capability, Disconnect, Flags, Frame, FrameId, Message, StreamId,
-    Version,
+    agent::{Ack as AgentAck, Disconnect as AgentDisconnect, Hello as AgentHello},
+    haproxy::{Disconnect as HaproxyDisconnect, Hello as HaproxyHello, Notify as HaproxyNotify},
+    parse_frame, put_frame, Disconnect, Frame, FrameId, Message, StreamId,
 };
-pub use self::status::Status;
+pub use self::version::Version;

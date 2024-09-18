@@ -1,18 +1,17 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{anyhow, bail, Result};
 use derive_more::{From, Into};
-use tokio::{
-    stream::Stream,
-    sync::{
-        mpsc::{error::TryRecvError::*, unbounded_channel, UnboundedReceiver, UnboundedSender},
-        oneshot,
-    },
+use futures::Stream;
+use tokio::sync::{
+    mpsc::{error::TryRecvError::*, unbounded_channel, UnboundedReceiver, UnboundedSender},
+    oneshot,
 };
 
-use crate::spop::{agent, haproxy, Action, Data, FrameId, Message, Scope, StreamId};
+use crate::spop::{Action, AgentAck, FrameId, HaproxyNotify, Message, Scope, StreamId, Typed};
 
 pub fn processing_messages() -> (Dispatcher, Processor) {
     let (processing, messages) = unbounded_channel();
@@ -35,11 +34,23 @@ pub struct Dispatcher {
 impl Dispatcher {
     pub fn recieve_messages(
         &mut self,
-        notify: haproxy::Notify,
-    ) -> Result<Option<oneshot::Receiver<agent::Ack>>> {
+        notify: HaproxyNotify,
+    ) -> Result<Option<oneshot::Receiver<AgentAck>>> {
         let key = (notify.stream_id, notify.frame_id);
         let (sender, acked) = {
-            if self.receiving.contains_key(&key) {
+            if let Entry::Vacant(e) = self.receiving.entry(key) {
+                let (sender, receiver) = unbounded_channel();
+
+                if notify.fragmented {
+                    e.insert(sender.clone());
+                }
+
+                let (acker, acked) = Acker::new(notify.stream_id, notify.frame_id);
+
+                self.processing.send((acker, receiver))?;
+
+                (sender, Some(acked))
+            } else {
                 let sender = if notify.fragmented {
                     self.receiving.get(&key).cloned()
                 } else {
@@ -48,18 +59,6 @@ impl Dispatcher {
                 .expect("sender");
 
                 (sender, None)
-            } else {
-                let (sender, receiver) = unbounded_channel();
-
-                if notify.fragmented {
-                    self.receiving.insert(key, sender.clone());
-                }
-
-                let (acker, acked) = Acker::new(notify.stream_id, notify.frame_id);
-
-                self.processing.send((acker, receiver))?;
-
-                (sender, Some(acked))
             }
         };
 
@@ -107,7 +106,7 @@ impl Stream for Messages {
 pub struct Acker(Option<Inner>);
 
 #[derive(Debug)]
-struct Inner(agent::Ack, oneshot::Sender<agent::Ack>);
+struct Inner(AgentAck, oneshot::Sender<AgentAck>);
 
 impl Drop for Acker {
     fn drop(&mut self) {
@@ -116,10 +115,10 @@ impl Drop for Acker {
 }
 
 impl Acker {
-    pub fn new(stream_id: StreamId, frame_id: FrameId) -> (Self, oneshot::Receiver<agent::Ack>) {
+    pub fn new(stream_id: StreamId, frame_id: FrameId) -> (Self, oneshot::Receiver<AgentAck>) {
         let (sender, receiver) = oneshot::channel();
         (
-            Acker(Some(Inner(agent::Ack::new(stream_id, frame_id), sender))),
+            Acker(Some(Inner(AgentAck::new(stream_id, frame_id), sender))),
             receiver,
         )
     }
@@ -141,7 +140,7 @@ impl Acker {
         }
     }
 
-    pub fn set_var<S: Into<String>, V: Into<Data>>(&mut self, scope: Scope, name: S, value: V) {
+    pub fn set_var<S: Into<String>, V: Into<Typed>>(&mut self, scope: Scope, name: S, value: V) {
         if let Some(Inner(ref mut ack, _)) = self.0 {
             ack.actions.push(Action::SetVar {
                 scope,

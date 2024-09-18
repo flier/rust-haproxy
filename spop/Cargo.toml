@@ -10,11 +10,10 @@ This protocol is used by engines to talk to agents.
 """
 
 [dependencies]
-bitflags = "1.0"
-bytes = "0.5"
-combine = "4.3"
-derive_more = "*"
-thiserror = "1.0"
-
-[dev-dependencies]
-lazy_static = "1.4"
+bitflags.workspace = true
+bytes.workspace = true
+derive_more.workspace = true
+hexplay.workspace = true
+num_enum.workspace = true
+parse-display.workspace = true
+thiserror.workspace = true

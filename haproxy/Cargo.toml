@@ -12,12 +12,13 @@ haproxy-spoe = { version = "0.1", path = "../spoe" }
 haproxy-spop = { version = "0.1", path = "../spop" }
 
 [dev-dependencies]
-anyhow = "1.0"
-bytes = "0.5"
-structopt = "0.3"
+anyhow.workspace = true
+bytes.workspace = true
+structopt.workspace = true
 
-tracing = "0.1"
-tracing-subscriber = "0.2"
-tracing-futures = "0.2"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-futures.workspace = true
 
-tokio = { version = "0.2", features = ["full"] }
+tokio.workspace = true
+tokio-util.workspace = true

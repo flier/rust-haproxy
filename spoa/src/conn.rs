@@ -1,5 +1,6 @@
 use anyhow::{Context as _, Result};
 use bytes::{BufMut, BytesMut};
+use haproxy_spop::parse_frame;
 use hexplay::HexViewBuilder;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -9,7 +10,7 @@ use tracing::instrument;
 
 use crate::{
     proto::MAX_FRAME_SIZE,
-    spop::{BufMutExt, Frame, Status},
+    spop::{put_frame, Error, Frame},
 };
 
 #[derive(Debug)]
@@ -32,7 +33,7 @@ impl Connection {
         if frame_length > self.max_frame_size {
             debug!("invalid frame length, {:x}", frame_length);
 
-            return Err(Status::BadFrameSize).context("frame too large");
+            return Err(Error::BadFrameSize).context("frame too large");
         }
 
         let mut buf = BytesMut::with_capacity(self.max_frame_size);
@@ -45,8 +46,8 @@ impl Connection {
         let buf = buf.freeze();
         trace!(len = frame_length, buf = %HexViewBuilder::new(&buf).finish(), "frame ready");
 
-        match Frame::parse(&buf) {
-            Ok((frame, _)) => {
+        match parse_frame(buf) {
+            Ok(frame) => {
                 trace!(?frame, "frame parsed");
 
                 Ok(frame)
@@ -54,7 +55,7 @@ impl Connection {
             Err(err) => {
                 debug!(?err, "parse failed");
 
-                Err(Status::Invalid).context("parse frame")
+                Err(Error::Invalid).context("parse frame")
             }
         }
     }
@@ -64,7 +65,7 @@ impl Connection {
         let frame_length = frame.size();
         let mut buf = BytesMut::with_capacity(Frame::LENGTH_SIZE + frame_length);
         buf.put_u32(frame_length as u32);
-        buf.put_frame(frame);
+        put_frame(&mut buf, frame);
 
         let buf = buf.freeze();
         self.stream.write_all(&buf).await.context("write frame")?;

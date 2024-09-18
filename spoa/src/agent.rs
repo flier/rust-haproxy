@@ -10,7 +10,7 @@ use tokio::net::{TcpListener, ToSocketAddrs};
 use crate::{
     msgs::{processing_messages, Dispatcher, Messages, Processor},
     service::MakeServiceRef,
-    spop::{Frame, Status},
+    spop::{Error as Status, Frame},
     Acker, Connection, State,
 };
 
@@ -85,7 +85,7 @@ async fn process_connection(mut conn: Connection, dispatcher: Dispatcher) -> Res
             }
             Err(err) => {
                 let reason = err.to_string();
-                let status = err.downcast::<Status>().unwrap_or(Status::Unknonw);
+                let status = err.downcast::<Status>().unwrap_or(Status::Unknown);
                 let frame = Frame::agent_disconnect(status, reason);
                 conn.write_frame(frame).await?;
                 break;

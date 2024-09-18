@@ -3,8 +3,10 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 
-use crate::proto::MAX_FRAME_SIZE;
-use crate::spop::{agent, haproxy, Capability, Status, Version};
+use crate::{
+    proto::MAX_FRAME_SIZE,
+    spop::{AgentHello, Capability, Error::NoVersion, HaproxyHello, Version},
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Handshaking {
@@ -28,7 +30,7 @@ impl Default for Handshaking {
 }
 
 impl Handshaking {
-    pub fn handshake(mut self, mut hello: haproxy::Hello) -> Result<Handshaked> {
+    pub fn handshake(mut self, mut hello: HaproxyHello) -> Result<Handshaked> {
         hello.supported_versions.sort();
         self.supported_versions.sort();
 
@@ -37,7 +39,7 @@ impl Handshaking {
             .into_iter()
             .rev()
             .find(|version| self.supported_versions.iter().any(|v| v == version))
-            .ok_or_else(|| Status::NoVersion)?;
+            .ok_or(NoVersion)?;
         let max_frame_size = cmp::min(hello.max_frame_size, self.max_frame_size);
         let capabilities = hello
             .capabilities
@@ -63,8 +65,8 @@ pub struct Handshaked {
 }
 
 impl Handshaked {
-    pub fn agent_hello(&self) -> agent::Hello {
-        agent::Hello {
+    pub fn agent_hello(&self) -> AgentHello {
+        AgentHello {
             version: self.version,
             max_frame_size: self.max_frame_size,
             capabilities: self.capabilities.clone(),

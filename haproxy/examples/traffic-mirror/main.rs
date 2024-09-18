@@ -6,16 +6,19 @@ This is a very simple program that can be used to replicate HTTP requests
 via the SPOP protocol.  All requests are replicated to the web address (URL)
 selected when running the program.
 */
+use std::fmt;
+use std::io;
+
 use anyhow::Result;
 use structopt::StructOpt;
 use tokio::{
-    net::{TcpListener, TcpStream},
-    stream::StreamExt,
+    net::{TcpListener, TcpStream, ToSocketAddrs},
+    select, signal,
 };
-use tracing::{debug, info_span, warn};
-use tracing_futures::Instrument;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tracing::{debug, info, instrument};
 
-use haproxy::{spoa::State, Connection, Frame, Status};
+use haproxy::{spoa::State, Connection, Frame, Error};
 
 #[derive(Debug, StructOpt)]
 #[structopt(
@@ -44,67 +47,87 @@ struct Opt {
     processing_delay: Option<usize>,
 }
 
-impl Opt {}
-
 #[tokio::main]
 pub async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let opt = Opt::from_args();
-    debug!("opt: {:#?}", opt);
 
-    let mut listener = TcpListener::bind((opt.address.as_str(), opt.port)).await?;
+    debug!(?opt);
 
-    let span = info_span!("agent", addr = %listener.local_addr()?);
-    let _s = span.enter();
+    let token = CancellationToken::new();
+    let tracker = TaskTracker::new();
 
-    let mut incoming = listener.incoming();
+    select! {
+        _ = serve((opt.address.as_str(), opt.port), token.clone(), tracker.clone()) => {}
+        _ = signal::ctrl_c() => {
+            tracker.close();
+            token.cancel();
+        }
+    };
 
-    while let Some(stream) = incoming.next().await {
-        match stream {
-            Ok(stream) => {
-                let peer = stream.peer_addr()?;
+    tracker.wait().await;
 
-                tokio::spawn(
-                    async move {
-                        debug!("accepted");
+    Ok(())
+}
 
-                        match process(stream).await {
-                            Ok(_) => debug!("closed"),
-                            Err(err) => warn!(%err, "exited"),
-                        }
-                    }
-                    .instrument(info_span!("engine", %peer)),
-                );
-            }
-            Err(err) => {
-                return Err(err.into());
-            }
+#[instrument(skip(token, tracker))]
+async fn serve<A: ToSocketAddrs + fmt::Debug>(
+    addr: A,
+    token: CancellationToken,
+    tracker: TaskTracker,
+) -> Result<()> {
+    let listener: TcpListener = TcpListener::bind(addr).await?;
+
+    let tok = token.clone();
+
+    loop {
+        select! {
+            _ = tok.cancelled() => { break }
+            _ = async {
+                let (stream, peer) = listener.accept().await?;
+                let tok = token.clone();
+
+                info!(?peer, "new connection established");
+
+                tracker.spawn(async move { process(stream, tok).await });
+
+                Ok::<_, io::Error>(())
+            }  => {}
         }
     }
 
     Ok(())
 }
 
-async fn process(stream: TcpStream) -> Result<()> {
+#[instrument(skip_all, fields(?task = tokio::task::id(), ?local = stream.local_addr().unwrap(), ?peer = stream.peer_addr().unwrap()), ret, err)]
+async fn process(stream: TcpStream, token: CancellationToken) -> Result<()> {
     let mut conn = Connection::new(stream);
     let mut state = State::default();
 
     loop {
-        let frame = conn.read_frame().await?;
-        match state.handle_frame(frame) {
-            Ok((next, reply)) => {
-                if let Some(frame) = reply {
-                    conn.write_frame(frame).await?;
-                }
-                state = next;
+        select! {
+            _ = token.cancelled() => {
+                let disconnect = Frame::agent_disconnect(Error::Normal, "agent is shutting down");
+                conn.write_frame(disconnect).await?;
+                break
             }
-            Err(err) => {
-                let reason = err.to_string();
-                let status = err.downcast::<Status>().unwrap_or(Status::Unknonw);
-                let frame = Frame::agent_disconnect(status, reason);
-                conn.write_frame(frame).await?;
-                break;
+            res = conn.read_frame() => {
+                match res.and_then(|frame| state.handle_frame(frame)) {
+                    Ok((next, reply)) => {
+                        if let Some(frame) = reply {
+                            conn.write_frame(frame).await?;
+                        }
+                        state = next;
+                    }
+                    Err(err) => {
+                        let reason = err.to_string();
+                        let status = err.downcast::<Error>().unwrap_or(Error::Unknown);
+                        let disconnect = Frame::agent_disconnect(status, reason);
+                        conn.write_frame(disconnect).await?;
+                        break;
+                    }
+                }
             }
         }
     }
