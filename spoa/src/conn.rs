@@ -1,39 +1,68 @@
-use tokio::net::TcpStream;
+use std::fmt;
+use std::mem;
+use std::sync::Arc;
+
+use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::instrument;
 
+use crate::runtime::Runtime;
 use crate::{
     error::Result,
     proto::MAX_FRAME_SIZE,
-    spop::{Error as Status, Frame, Framer},
+    spop::{BufCodec, Codec, Error as Status, Frame, Framer},
+    state::AsyncHandler,
+    State,
 };
 
 #[derive(Debug)]
-pub struct Connection {
-    stream: TcpStream,
-    framer: Framer,
+pub struct Connection<S> {
+    codec: BufCodec<S>,
+    state: State,
 }
 
-impl Connection {
-    pub fn new(stream: TcpStream) -> Self {
+impl<S> Connection<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    pub fn new(runtime: Arc<Runtime>, stream: S, max_frame_size: Option<usize>) -> Self {
+        let framer = Framer::new(max_frame_size.unwrap_or(MAX_FRAME_SIZE));
+
         Connection {
-            stream,
-            framer: Framer::new(MAX_FRAME_SIZE),
+            codec: Codec::buffered(stream, framer),
+            state: State::new(runtime),
         }
     }
 
-    pub async fn disconnect<S: Into<String>>(&mut self, status: Status, msg: S) -> Result<()> {
-        let disconnect = Frame::agent_disconnect(status, msg);
-        self.write_frame(disconnect).await?;
+    pub async fn serve(&mut self) -> Result<()> {
+        loop {
+            let state = mem::replace(&mut self.state, State::Disconnected);
+            let frame = self.codec.read_frame().await?;
+
+            match state.handle_frame(frame).await {
+                Ok((next, reply)) => {
+                    if let Some(frame) = reply {
+                        self.codec.write_frame(frame).await?;
+                    }
+                    self.state = next;
+                }
+                Err(err) => {
+                    let frame = Frame::AgentDisconnect(err.into());
+                    self.codec.write_frame(frame).await?;
+                    break;
+                }
+            }
+        }
+
         Ok(())
     }
 
-    #[instrument(skip_all, ret, err, level = "trace")]
-    pub async fn read_frame(&mut self) -> Result<Frame> {
-        Ok(self.framer.read_frame(&mut self.stream).await?)
-    }
-
-    #[instrument(skip(self), ret, err, level = "trace")]
-    pub async fn write_frame(&mut self, frame: Frame) -> Result<usize> {
-        Ok(self.framer.write_frame(&mut self.stream, frame).await?)
+    #[instrument(skip(self), ret, err, level = "debug")]
+    pub async fn disconnect<M>(&mut self, status: Status, msg: M) -> Result<()>
+    where
+        M: Into<String> + fmt::Debug,
+    {
+        let disconnect = Frame::agent_disconnect(status, msg);
+        self.codec.write_frame(disconnect).await?;
+        Ok(())
     }
 }

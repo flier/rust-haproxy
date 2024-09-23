@@ -1,4 +1,4 @@
-use crate::{data::Value, frame::kv};
+use crate::{data::Value, frame::kv, Error};
 
 /// If an error occurs, at anytime, from the HAProxy/agent side,
 /// a HAPROXY-DISCONNECT/AGENT-DISCONNECT frame is sent with information describing the error.
@@ -11,6 +11,13 @@ pub struct Disconnect {
 }
 
 impl Disconnect {
+    pub fn new<S: Into<String>>(status: Error, reason: S) -> Self {
+        Self {
+            status_code: status as u32,
+            message: reason.into(),
+        }
+    }
+
     pub(crate) fn size(&self) -> usize {
         kv::status_code(self.status_code).size() + kv::message(&self.message).size()
     }

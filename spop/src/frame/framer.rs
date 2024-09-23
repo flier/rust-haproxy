@@ -4,7 +4,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{
     error::{Error::*, Result},
-    frame::{parse_frame, put_frame, Frame},
+    frame::{
+        buf::{parse_frame, put_frame},
+        Frame,
+    },
 };
 
 #[derive(Clone, Debug)]

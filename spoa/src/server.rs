@@ -10,8 +10,8 @@ use tokio::net::ToSocketAddrs;
 use crate::{
     accept::Accept,
     error::Result,
-    msgs::{Acker, Messages},
     proto::{Protocol, SpawnAll},
+    runtime::{Acker, Messages},
     service::MakeServiceRef,
     spop::{Capability, Version},
     tcp::Incoming,
@@ -75,6 +75,21 @@ impl<I> Builder<I> {
 
     pub fn max_frame_size(mut self, max_frame_size: u32) -> Self {
         self.protocol.max_frame_size(max_frame_size);
+        self
+    }
+
+    pub fn fragmentation(mut self) -> Self {
+        self.protocol.with_capability(Capability::Fragmentation);
+        self
+    }
+
+    pub fn pipelining(mut self) -> Self {
+        self.protocol.with_capability(Capability::Pipelining);
+        self
+    }
+
+    pub fn asynchronization(mut self) -> Self {
+        self.protocol.with_capability(Capability::Async);
         self
     }
 

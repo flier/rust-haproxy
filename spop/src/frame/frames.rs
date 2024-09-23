@@ -1,6 +1,6 @@
 use std::mem;
 
-use derive_more::derive::{IsVariant, TryUnwrap};
+use derive_more::derive::{From, IsVariant, TryUnwrap};
 
 use crate::{
     frame::{self, Metadata, Type},
@@ -8,19 +8,22 @@ use crate::{
 };
 
 /// Frame sent by HAProxy and by agents
-#[derive(Clone, Debug, PartialEq, Eq, IsVariant, TryUnwrap)]
+#[derive(Clone, Debug, PartialEq, Eq, From, IsVariant, TryUnwrap)]
 pub enum Frame {
     /// Used for all frames but the first when a payload is fragmented.
+    #[from(skip)]
     Unset,
     /// Sent by HAProxy when it opens a connection on an agent.
     HaproxyHello(HaproxyHello),
     /// Sent by HAProxy when it want to close the connection or in reply to an AGENT-DISCONNECT frame
+    #[from(skip)]
     HaproxyDisconnect(HaproxyDisconnect),
     /// Sent by HAProxy to pass information to an agent
     HaproxyNotify(HaproxyNotify),
     /// Reply to a HAPROXY-HELLO frame, when the connection is established
     AgentHello(AgentHello),
     /// Sent by an agent just before closing the connection
+    #[from(skip)]
     AgentDisconnect(AgentDisconnect),
     /// Sent to acknowledge a NOTIFY frame
     AgentAck(AgentAck),
@@ -42,10 +45,7 @@ impl Frame {
     }
 
     pub fn agent_disconnect<S: Into<String>>(status: Error, reason: S) -> Self {
-        Frame::AgentDisconnect(frame::Disconnect {
-            status_code: status as u32,
-            message: reason.into(),
-        })
+        Frame::AgentDisconnect(frame::Disconnect::new(status, reason))
     }
 }
 

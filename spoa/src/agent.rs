@@ -1,17 +1,18 @@
 use std::future::Future;
+use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use futures::ready;
+use futures::{pin_mut, ready};
 use pin_project::pin_project;
-use tokio::net::{TcpListener, ToSocketAddrs};
+use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 
 use crate::{
+    conn::Connection,
     error::{Context as _, Error, Result},
-    msgs::{processing_messages, Dispatcher, Messages, Processor},
+    runtime::{Acker, Messages, Runtime},
     service::MakeServiceRef,
-    spop::{Error as Status, Frame},
-    Acker, Connection, State,
 };
 
 #[derive(Debug)]
@@ -26,74 +27,50 @@ impl Agent {
         Ok(Agent { listener })
     }
 
-    pub fn serve<S, B>(self, new_service: S) -> Serve<S> {
-        let (dispatcher, processor) = processing_messages();
-
+    pub fn serve<S, IO>(self, new_service: S) -> Serve<S, IO> {
         Serve {
             listener: self.listener,
             new_service,
-            dispatcher,
-            processor,
+            runtime: Arc::new(Runtime::default()),
+            phantom: PhantomData,
         }
     }
 }
 
 #[pin_project]
 #[derive(Debug)]
-pub struct Serve<S> {
+pub struct Serve<S, IO> {
     #[pin]
     listener: TcpListener,
     new_service: S,
-    dispatcher: Dispatcher,
-    processor: Processor,
+    runtime: Arc<Runtime>,
+    phantom: PhantomData<IO>,
 }
 
-impl<S> Future for Serve<S>
+impl<S> Future for Serve<S, TcpStream>
 where
-    S: MakeServiceRef<Connection, (Acker, Messages), Error = Error> + Send,
+    S: MakeServiceRef<Connection<TcpStream>, (Acker, Messages), Error = Error> + Send,
 {
     type Output = Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         let me = self.project();
+        let max_frame_size = me.runtime.max_frame_size;
 
         loop {
             match ready!(me.listener.poll_accept(cx)) {
-                Ok((stream, peer)) => {
-                    debug!(%peer, "connection accepted");
+                Ok((stream, _)) => {
+                    let runtime = me.runtime.clone();
+                    let conn = Connection::new(runtime, stream, Some(max_frame_size));
 
-                    tokio::spawn(process_connection(
-                        Connection::new(stream),
-                        me.dispatcher.clone(),
-                    ));
+                    tokio::spawn(async move {
+                        pin_mut!(conn);
+
+                        conn.serve().await
+                    });
                 }
                 Err(err) => return Poll::Ready(Err(err).context("accept failed")),
             }
         }
     }
-}
-
-async fn process_connection(mut conn: Connection, dispatcher: Dispatcher) -> Result<()> {
-    let mut state = State::default();
-
-    loop {
-        let frame = conn.read_frame().await?;
-        match state.handle_frame(frame) {
-            Ok((next, reply)) => {
-                if let Some(frame) = reply {
-                    conn.write_frame(frame).await?;
-                }
-                state = next;
-            }
-            Err(err) => {
-                let reason = err.to_string();
-                let status = err.status().unwrap_or(Status::Unknown);
-                let frame = Frame::agent_disconnect(status, reason);
-                conn.write_frame(frame).await?;
-                break;
-            }
-        }
-    }
-
-    Ok(())
 }

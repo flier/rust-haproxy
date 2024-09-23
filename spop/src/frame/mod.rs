@@ -1,18 +1,24 @@
 pub mod agent;
 mod buf;
+mod codec;
 mod disconnect;
+mod fragment;
 mod framer;
 mod frames;
+mod handler;
 pub mod haproxy;
 mod kv;
 mod metadata;
 mod msg;
+mod pipeline;
 mod ty;
 
-pub use self::buf::{parse_frame, put_frame};
+pub use self::codec::{BufCodec, Codec};
 pub use self::disconnect::Disconnect;
+pub use self::fragment::Reassembly;
 pub use self::framer::Framer;
 pub use self::frames::Frame;
+pub use self::handler::AsyncHandler;
 pub use self::metadata::{Flags, FrameId, Metadata, StreamId};
 pub use self::msg::Message;
 pub use self::ty::Type;

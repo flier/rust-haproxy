@@ -10,7 +10,7 @@ use pin_project::pin_project;
 use crate::{
     accept::Accept,
     error::{Context as _, Result},
-    msgs::{Acker, Messages},
+    runtime::{Acker, Messages},
     service::MakeServiceRef,
     spop::{Capability, Version},
 };
@@ -102,7 +102,6 @@ where
         match ready!(me.make_service.poll_ready_ref(cx)) {
             Ok(()) => (),
             Err(err) => {
-                trace!("make_service closed");
                 return Poll::Ready(Some(Err(err).context("make service")));
             }
         }

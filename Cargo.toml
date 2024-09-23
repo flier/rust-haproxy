@@ -6,8 +6,9 @@ members = ["haproxy", "spoa", "spoe", "spop"]
 anyhow = "1"
 bitflags = "2.6"
 bytes = "1.7"
+dashmap = "6.1"
 derive_more = { version = "1", features = ["full"] }
-futures = { version = "0.3", features = ["async-await"] }
+futures = "0.3"
 hexplay = "0.3"
 lazy_static = "1.5"
 num_enum = "0.7"
@@ -15,8 +16,8 @@ parse-display = "0.10"
 pin-project = "1.1"
 structopt = "0.3"
 thiserror = "1.0"
-tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["full"] }
+tokio = "1"
+tokio-util = "0.7"
 tower-service = "0.3"
 tracing = "0.1"
 tracing-futures = "0.2"

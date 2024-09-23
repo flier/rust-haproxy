@@ -12,6 +12,6 @@ pub use self::error::Error;
 pub use self::frame::{
     agent::{Ack as AgentAck, Disconnect as AgentDisconnect, Hello as AgentHello},
     haproxy::{Disconnect as HaproxyDisconnect, Hello as HaproxyHello, Notify as HaproxyNotify},
-    Disconnect, Frame, FrameId, Framer, Message, StreamId,
+    BufCodec, Codec, Disconnect, Frame, FrameId, Framer, Message, Reassembly, StreamId,
 };
 pub use self::version::Version;

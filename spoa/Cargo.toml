@@ -13,12 +13,13 @@ By extension, these servers can also be called agents.
 
 [dependencies]
 bytes.workspace = true
+dashmap.workspace = true
 derive_more.workspace = true
 futures.workspace = true
 hexplay.workspace = true
 pin-project.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["net", "rt"] }
 tower-service.workspace = true
 tracing-futures.workspace = true
 tracing.workspace = true

@@ -18,4 +18,4 @@ hexplay.workspace = true
 num_enum.workspace = true
 parse-display.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["io-util"] }

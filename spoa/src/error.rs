@@ -7,8 +7,8 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    spop::{Error as Status, Message},
-    Acker,
+    runtime::Acker,
+    spop::{Disconnect, Error as Status, Message},
 };
 
 pub type Result<T> = StdResult<T, Error>;
@@ -56,6 +56,27 @@ impl Error {
                 }
             }
             _ => None,
+        }
+    }
+}
+
+impl From<Error> for Disconnect {
+    fn from(err: Error) -> Self {
+        match err {
+            Error::Status(status) => Disconnect::new(status, status.to_string()),
+            Error::Context {
+                ref source,
+                ref context,
+            } => {
+                if let Some(status) = source.downcast_ref::<Error>().and_then(|err| err.status()) {
+                    Disconnect::new(status, context.to_string())
+                } else if let Some(status) = source.downcast_ref::<Status>() {
+                    Disconnect::new(*status, context.to_string())
+                } else {
+                    Disconnect::new(Status::Unknown, err.to_string())
+                }
+            }
+            _ => Disconnect::new(Status::Unknown, err.to_string()),
         }
     }
 }
