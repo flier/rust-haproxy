@@ -3,6 +3,7 @@ mod caps;
 mod data;
 mod error;
 mod frame;
+mod handler;
 mod version;
 
 pub use self::action::{Action, Scope};
@@ -14,4 +15,5 @@ pub use self::frame::{
     haproxy::{Disconnect as HaproxyDisconnect, Hello as HaproxyHello, Notify as HaproxyNotify},
     BufCodec, Codec, Disconnect, Frame, FrameId, Framer, Message, Reassembly, StreamId,
 };
+pub use self::handler::AsyncHandler;
 pub use self::version::Version;

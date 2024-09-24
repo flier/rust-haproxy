@@ -3,7 +3,7 @@ use std::fmt;
 use std::future::Future;
 use std::task::{Context, Poll};
 
-use tower_service::Service;
+use tower::Service;
 
 use crate::spop::Action;
 

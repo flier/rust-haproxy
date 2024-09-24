@@ -12,6 +12,7 @@ This protocol is used by engines to talk to agents.
 [dependencies]
 bitflags.workspace = true
 bytes.workspace = true
+dashmap.workspace = true
 derive_more.workspace = true
 futures.workspace = true
 hexplay.workspace = true
@@ -19,3 +20,7 @@ num_enum.workspace = true
 parse-display.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
+tower = { workspace = true, features = ["util"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

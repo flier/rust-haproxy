@@ -3,8 +3,9 @@ use std::mem;
 use derive_more::derive::{From, IsVariant, TryUnwrap};
 
 use crate::{
-    frame::{self, Metadata, Type},
-    AgentAck, AgentDisconnect, AgentHello, Error, HaproxyDisconnect, HaproxyHello, HaproxyNotify,
+    frame::{self, Message, Metadata, Type},
+    Action, AgentAck, AgentDisconnect, AgentHello, Error, HaproxyDisconnect, HaproxyHello,
+    HaproxyNotify,
 };
 
 /// Frame sent by HAProxy and by agents
@@ -42,6 +43,37 @@ impl Frame {
             Frame::AgentDisconnect(_) => Type::AgentDisconnect,
             Frame::AgentAck(_) => Type::AgentAck,
         }
+    }
+
+    pub fn notify<I, T>(stream_id: u64, frame_id: u64, msgs: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<Message>,
+    {
+        Frame::HaproxyNotify(HaproxyNotify {
+            fragmented: false,
+            stream_id,
+            frame_id,
+            messages: msgs.into_iter().map(|m| m.into()).collect(),
+        })
+    }
+
+    pub fn ack<I, T>(stream_id: u64, frame_id: u64, actions: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<Action>,
+    {
+        Frame::AgentAck(AgentAck {
+            fragmented: false,
+            aborted: false,
+            stream_id,
+            frame_id,
+            actions: actions.into_iter().map(|a| a.into()).collect(),
+        })
+    }
+
+    pub fn haproxy_disconnect<S: Into<String>>(status: Error, reason: S) -> Self {
+        Frame::HaproxyDisconnect(frame::Disconnect::new(status, reason))
     }
 
     pub fn agent_disconnect<S: Into<String>>(status: Error, reason: S) -> Self {

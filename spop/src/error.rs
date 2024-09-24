@@ -1,12 +1,13 @@
 use std::result::Result as StdResult;
 
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use thiserror::Error;
 
 pub type Result<T> = StdResult<T, Error>;
 
 /// Errors triggered by SPOE applet
 #[repr(u32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error, TryFromPrimitive, IntoPrimitive)]
 pub enum Error {
     /// normal    
     #[error("normal")]

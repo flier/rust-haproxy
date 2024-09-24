@@ -1,61 +1,59 @@
-use std::collections::{hash_map::Entry, HashMap};
+use dashmap::{DashMap, Entry};
 
 use crate::{
     error::{Error, Result},
-    frame::{agent::Ack, haproxy::Notify, AsyncHandler, Frame, FrameId, Message, StreamId},
-    Action,
+    frame::{agent::Ack, haproxy::Notify, Frame, FrameId, Message, StreamId},
+    Action, AsyncHandler,
 };
 
 #[derive(Clone, Debug)]
 pub struct Reassembly<T>(Table<T>);
 
-impl AsyncHandler for Reassembly<Message> {
-    type Output = Option<Vec<Message>>;
+impl AsyncHandler<Option<Vec<Message>>> for Reassembly<Message> {
     type Error = Error;
 
     async fn handle_frame(&mut self, frame: Frame) -> Result<Option<Vec<Message>>> {
-        if let Frame::HaproxyNotify(Notify {
-            fragmented,
-            stream_id,
-            frame_id,
-            messages,
-        }) = frame
-        {
-            self.0
-                .reassemble(fragmented, (stream_id, frame_id), messages)
-        } else {
-            Ok(None)
+        match frame {
+            Frame::HaproxyNotify(Notify {
+                fragmented,
+                stream_id,
+                frame_id,
+                messages,
+            }) => self
+                .0
+                .reassemble(fragmented, (stream_id, frame_id), messages),
+            Frame::HaproxyDisconnect(_) => Err(Error::Normal),
+            _ => Err(Error::Invalid),
         }
     }
 }
 
-impl AsyncHandler for Reassembly<Action> {
-    type Output = Option<Vec<Action>>;
+impl AsyncHandler<Option<Vec<Action>>> for Reassembly<Action> {
     type Error = Error;
 
     async fn handle_frame(&mut self, frame: Frame) -> Result<Option<Vec<Action>>> {
-        if let Frame::AgentAck(Ack {
-            fragmented,
-            stream_id,
-            frame_id,
-            actions,
-            ..
-        }) = frame
-        {
-            self.0
-                .reassemble(fragmented, (stream_id, frame_id), actions)
-        } else {
-            Ok(None)
+        match frame {
+            Frame::AgentAck(Ack {
+                fragmented,
+                stream_id,
+                frame_id,
+                actions,
+                ..
+            }) => self
+                .0
+                .reassemble(fragmented, (stream_id, frame_id), actions),
+            Frame::AgentDisconnect(_) => Err(Error::Normal),
+            _ => Err(Error::Invalid),
         }
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Table<T>(HashMap<(StreamId, FrameId), Vec<T>>);
+pub struct Table<T>(DashMap<(StreamId, FrameId), Vec<T>>);
 
 impl<T> Table<T> {
     fn reassemble(
-        &mut self,
+        &self,
         fragmented: bool,
         key: (StreamId, FrameId),
         mut value: Vec<T>,
