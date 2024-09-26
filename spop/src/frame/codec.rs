@@ -1,4 +1,5 @@
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufStream};
+use tracing::instrument;
 
 use crate::{
     error::{Error::Io, Result},
@@ -33,10 +34,12 @@ where
         Self { stream, framer }
     }
 
+    #[instrument(skip(self), ret, err, level = "trace")]
     pub async fn read_frame(&mut self) -> Result<Frame> {
         self.framer.read_frame(&mut self.stream).await
     }
 
+    #[instrument(skip(self), ret, err, level = "trace")]
     pub async fn write_frame(&mut self, frame: Frame) -> Result<usize> {
         let sz = self.framer.write_frame(&mut self.stream, frame).await?;
 

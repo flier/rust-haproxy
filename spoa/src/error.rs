@@ -36,13 +36,10 @@ pub enum Error {
     #[error("{context}, {source}")]
     Context {
         #[source]
-        source: Box<dyn StdError>,
+        source: Box<dyn StdError + Send + Sync>,
         context: Box<dyn Reason>,
     },
 }
-
-unsafe impl Send for Error {}
-unsafe impl Sync for Error {}
 
 impl Error {
     pub fn status(&self) -> Option<Status> {
@@ -98,7 +95,7 @@ pub trait Context<T, E> {
 
 impl<T, E> Context<T, E> for StdResult<T, E>
 where
-    E: StdError + 'static,
+    E: StdError + Send + Sync + 'static,
 {
     fn context<C>(self, reason: C) -> StdResult<T, Error>
     where

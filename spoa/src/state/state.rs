@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use derive_more::derive::From;
+use tracing::instrument;
 
 use crate::{
     error::Result,
@@ -27,6 +28,7 @@ impl State {
 }
 
 impl AsyncHandler for State {
+    #[instrument(skip(self), ret, err, level = "trace")]
     async fn handle_frame(self, frame: Frame) -> Result<(State, Option<Frame>)> {
         match self {
             State::Initialized(handshaking) => handshaking.handle_frame(frame).await,

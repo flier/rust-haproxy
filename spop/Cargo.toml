@@ -21,6 +21,7 @@ parse-display.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 tower = { workspace = true, features = ["util"] }
+tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }

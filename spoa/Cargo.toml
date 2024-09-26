@@ -20,6 +20,7 @@ hexplay.workspace = true
 pin-project.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["net", "rt"] }
+tokio-util = { workspace = true, features = ["rt"] }
 tower = { workspace = true, features = ["make"] }
 tracing-futures.workspace = true
 tracing.workspace = true

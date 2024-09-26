@@ -8,28 +8,30 @@ use tracing::instrument;
 use crate::runtime::Runtime;
 use crate::{
     error::Result,
-    proto::MAX_FRAME_SIZE,
     spop::{BufCodec, Codec, Error as Status, Frame, Framer},
     state::AsyncHandler,
     State,
 };
 
 #[derive(Debug)]
-pub struct Connection<S> {
-    codec: BufCodec<S>,
+pub struct Connection<IO, S> {
+    codec: BufCodec<IO>,
     state: State,
+    service: S,
 }
 
-impl<S> Connection<S>
+impl<IO, S> Connection<IO, S>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    IO: AsyncRead + AsyncWrite + Unpin,
 {
-    pub fn new(runtime: Arc<Runtime>, stream: S, max_frame_size: Option<usize>) -> Self {
-        let framer = Framer::new(max_frame_size.unwrap_or(MAX_FRAME_SIZE));
+    pub fn new(runtime: Arc<Runtime>, io: IO, max_frame_size: usize, service: S) -> Self {
+        let framer = Framer::new(max_frame_size);
+        let codec = Codec::buffered(io, framer);
 
         Connection {
-            codec: Codec::buffered(stream, framer),
+            codec,
             state: State::new(runtime),
+            service,
         }
     }
 
@@ -56,7 +58,7 @@ where
         Ok(())
     }
 
-    #[instrument(skip(self), ret, err, level = "debug")]
+    #[instrument(skip(self), err, level = "trace")]
     pub async fn disconnect<M>(&mut self, status: Status, msg: M) -> Result<()>
     where
         M: Into<String> + fmt::Debug,

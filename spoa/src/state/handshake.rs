@@ -5,12 +5,11 @@ use tracing::instrument;
 
 use crate::{
     error::{Context as _, Result},
-    proto::MAX_FRAME_SIZE,
     runtime::Runtime,
     spop::{
         AgentHello, Capability,
         Error::{self, NoVersion},
-        Frame, HaproxyHello, Version,
+        Frame, HaproxyHello, Version, MAX_FRAME_SIZE,
     },
     state::{AsyncHandler, Processing, State},
 };

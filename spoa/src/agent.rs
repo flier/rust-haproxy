@@ -1,76 +1,109 @@
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::{convert::Infallible, net::TcpListener as StdTcpListener, sync::Arc};
 
-use futures::{pin_mut, ready};
-use pin_project::pin_project;
-use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    net::TcpListener,
+    select,
+};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tower::{service_fn, MakeService, Service};
+use tracing::{debug, instrument, trace};
 
 use crate::{
-    conn::Connection,
-    error::{Context as _, Error, Result},
-    runtime::{Acker, Messages, Runtime},
-    service::MakeServiceRef,
+    error::Result,
+    spop::{Action, Error::*, Message},
+    Connection, Runtime,
 };
 
 #[derive(Debug)]
 pub struct Agent {
     listener: TcpListener,
+    max_frame_size: usize,
+    shutdown: Shutdown,
 }
 
 impl Agent {
-    pub async fn bind<A: ToSocketAddrs>(addr: A) -> Result<Agent> {
-        let listener = TcpListener::bind(addr).await?;
+    pub fn new(listener: StdTcpListener, max_frame_size: usize) -> Result<Agent> {
+        let listener = TcpListener::from_std(listener)?;
 
-        Ok(Agent { listener })
+        Ok(Agent {
+            listener,
+            max_frame_size,
+            shutdown: Shutdown::default(),
+        })
     }
 
-    pub fn serve<S, IO>(self, new_service: S) -> Serve<S, IO> {
-        Serve {
-            listener: self.listener,
-            new_service,
-            runtime: Arc::new(Runtime::default()),
-            phantom: PhantomData,
-        }
+    pub fn shutdown(&self) -> Shutdown {
+        self.shutdown.clone()
     }
 }
 
-#[pin_project]
-#[derive(Debug)]
-pub struct Serve<S, IO> {
-    #[pin]
-    listener: TcpListener,
-    new_service: S,
-    runtime: Arc<Runtime>,
-    phantom: PhantomData<IO>,
+#[derive(Clone, Debug, Default)]
+pub struct Shutdown {
+    tracker: TaskTracker,
+    token: CancellationToken,
 }
 
-impl<S> Future for Serve<S, TcpStream>
-where
-    S: MakeServiceRef<Connection<TcpStream>, (Acker, Messages), Error = Error> + Send,
-{
-    type Output = Result<()>;
+impl Shutdown {
+    pub fn shutdown(self) {
+        self.token.cancel();
+    }
+}
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let me = self.project();
-        let max_frame_size = me.runtime.max_frame_size;
+impl Agent {
+    pub async fn serve<S>(&self, service: S) -> Result<()>
+    where
+        S: Service<Vec<Message>, Response = Vec<Action>> + Clone + Send + 'static,
+    {
+        let new_service = service_fn(|_: ()| async { Ok::<_, Infallible>(service.clone()) });
+
+        self.make_serve(new_service, ()).await
+    }
+
+    pub async fn make_serve<S, T>(&self, mut new_service: S, state: T) -> Result<()>
+    where
+        S: MakeService<T, Vec<Message>, Response = Vec<Action>, MakeError = Infallible>,
+        S::Service: Send + 'static,
+        T: Clone,
+    {
+        let runtime = Arc::new(Runtime::default());
 
         loop {
-            match ready!(me.listener.poll_accept(cx)) {
-                Ok((stream, _)) => {
-                    let runtime = me.runtime.clone();
-                    let conn = Connection::new(runtime, stream, Some(max_frame_size));
-
-                    tokio::spawn(async move {
-                        pin_mut!(conn);
-
-                        conn.serve().await
-                    });
+            select! {
+                _ = self.shutdown.token.cancelled() => {
+                    debug!("shutting down");
+                    break
                 }
-                Err(err) => return Poll::Ready(Err(err).context("accept failed")),
+                Ok((stream, peer)) = self.listener.accept() => {
+                    trace!(?peer, "accepted connection");
+
+                    let service = new_service.make_service(state.clone()).await.unwrap();
+                    let conn = Connection::new(runtime.clone(), stream, self.max_frame_size, service);
+                    let tok = self.shutdown.token.child_token();
+
+                    self.shutdown.tracker.spawn(async move { process(conn, tok).await });
+                }
             }
+        }
+
+        self.shutdown.tracker.close();
+        self.shutdown.tracker.wait().await;
+
+        Ok(())
+    }
+}
+
+#[instrument(skip_all, fields(?task = tokio::task::id()), err, level = "trace")]
+async fn process<IO, S>(mut conn: Connection<IO, S>, tok: CancellationToken) -> Result<()>
+where
+    IO: AsyncRead + AsyncWrite + Unpin,
+{
+    select! {
+        _ = tok.cancelled() => {
+            conn.disconnect(Normal, "shutting down").await
+        }
+        res = conn.serve() => {
+            res
         }
     }
 }

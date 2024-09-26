@@ -1,126 +1,161 @@
-/*
-Replicating (mirroring) HTTP requests using the HAProxy SPOP, i.e. Stream
-Processing Offload Protocol.
+//! Replicating (mirroring) HTTP requests using the HAProxy SPOP,
+//! i.e. Stream Processing Offload Protocol.
+//!
+//! This is a very simple program that can be used to replicate HTTP requests
+//! via the SPOP protocol.  All requests are replicated to the web address (URL)
+//! selected when running the program.
 
-This is a very simple program that can be used to replicate HTTP requests
-via the SPOP protocol.  All requests are replicated to the web address (URL)
-selected when running the program.
-*/
-use std::fmt;
+use std::env;
+use std::fs::create_dir_all;
 use std::io;
-use std::sync::Arc;
+use std::net::TcpListener;
+use std::path::PathBuf;
+use std::{convert::Infallible, fs::File};
 
-use anyhow::Result;
-use structopt::StructOpt;
-use tokio::{
-    net::{TcpListener, TcpStream, ToSocketAddrs},
-    select, signal,
-};
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use anyhow::{Context, Result};
+use clap::Parser;
+use daemonize::Daemonize;
+use rlimit::{getrlimit, setrlimit, Resource};
+use tokio::signal;
+use tower::service_fn;
 use tracing::{debug, instrument};
 
 use haproxy::{
-    agent::{Connection, Runtime},
-    proto::Error::*,
+    agent::Agent,
+    proto::{Action, Capability, Message, MAX_FRAME_SIZE},
 };
 
-#[derive(Debug, StructOpt)]
-#[structopt(
-    name = "traffic-mirror",
-    about = "Replicating (mirroring) HTTP requests using the HAProxy SPOP."
-)]
+#[derive(Debug, Parser)]
+#[command(version, author, about)]
 struct Opt {
     /// Specify the address to listen on
-    #[structopt(short, long, default_value = "0.0.0.0")]
-    address: String,
+    #[arg(short, long, default_value = "127.0.0.1")]
+    addr: String,
 
     /// Specify the port to listen on
-    #[structopt(short, long, default_value = "12345")]
+    #[arg(short, long, default_value = "12345")]
     port: u16,
 
+    /// Specify the connection backlog size
+    #[arg(short, long, default_value_t = 10)]
+    backlog: i32,
+
     /// Enable the support of the specified capability.
-    #[structopt(short, long)]
-    capability: Vec<String>,
+    #[arg(short, long, value_enum)]
+    capability: Vec<Capability>,
 
     /// Specify the maximum frame size
-    #[structopt(short, long)]
-    max_frame_size: Option<usize>,
+    #[arg(short, long, default_value_t = MAX_FRAME_SIZE)]
+    max_frame_size: usize,
 
     /// Set a delay to process a message
-    #[structopt(short = "t", long)]
+    #[arg(short = 't', long)]
     processing_delay: Option<usize>,
+
+    /// Run this program as a daemon.
+    #[arg(short = 'D', long)]
+    daemonize: bool,
+
+    /// Specifies a file to write the process-id to.
+    #[arg(short = 'F', long)]
+    pid_file: Option<PathBuf>,
+
+    /// Change root directory
+    #[arg(long)]
+    chroot: Option<PathBuf>,
 }
 
-#[tokio::main]
-pub async fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let opt = Opt::from_args();
-
+    let opt = Opt::parse();
     debug!(?opt);
 
-    let token = CancellationToken::new();
-    let tracker = TaskTracker::new();
+    let listen = {
+        let Opt {
+            addr,
+            port,
+            backlog,
+            ..
+        } = opt;
 
-    select! {
-        _ = serve((opt.address.as_str(), opt.port), opt.max_frame_size, token.clone(), tracker.clone()) => {}
-        _ = signal::ctrl_c() => {
-            token.cancel();
+        move || {
+            net2::TcpBuilder::new_v4()?
+                .reuse_address(true)?
+                .bind((addr, port))?
+                .listen(backlog)
         }
     };
 
-    tracker.close();
-    tracker.wait().await;
+    let listener = if opt.daemonize {
+        daemonize(listen, opt.pid_file, opt.chroot)?
+    } else {
+        listen()?
+    };
+
+    serve(listener, opt.max_frame_size)
+}
+
+#[instrument(skip_all, err)]
+fn daemonize<F, T>(action: F, pid_file: Option<PathBuf>, chroot: Option<PathBuf>) -> Result<T>
+where
+    F: FnOnce() -> io::Result<T> + 'static,
+{
+    let bin_name: &str = env!("CARGO_BIN_NAME");
+    let root_dir = env::temp_dir().join(bin_name);
+    create_dir_all(&root_dir)?;
+
+    let pid_file = pid_file.unwrap_or_else(|| root_dir.join(format!("{bin_name}.pid")));
+    let stdout = File::create(root_dir.join(format!("{bin_name}.stdout")))?;
+    let stderr = File::create(root_dir.join(format!("{bin_name}.stderr")))?;
+
+    let mut daemonize = Daemonize::new()
+        .pid_file(pid_file)
+        .chown_pid_file(true)
+        .umask(0)
+        .working_directory(&root_dir)
+        .stdout(stdout)
+        .stderr(stderr)
+        .privileged_action(action);
+
+    if let Some(path) = chroot {
+        daemonize = daemonize.chroot(path);
+    }
+
+    debug!(?daemonize);
+
+    daemonize.start().context("daemonize")?.context("listen")
+}
+
+#[tokio::main]
+async fn serve(listener: TcpListener, max_frame_size: usize) -> Result<()> {
+    rlimit_setnofile()?;
+
+    let agent = Agent::new(listener, max_frame_size)?;
+    let shutdown = agent.shutdown();
+
+    tokio::spawn(async move {
+        signal::ctrl_c().await.unwrap();
+
+        debug!("received Ctrl+C");
+
+        shutdown.shutdown();
+    });
+
+    agent
+        .serve(service_fn(|msgs: Vec<Message>| async {
+            Ok::<_, Infallible>(vec![])
+        }))
+        .await?;
 
     Ok(())
 }
 
-#[instrument(skip(token, tracker))]
-async fn serve<A: ToSocketAddrs + fmt::Debug>(
-    addr: A,
-    max_frame_size: Option<usize>,
-    token: CancellationToken,
-    tracker: TaskTracker,
-) -> Result<()> {
-    let listener: TcpListener = TcpListener::bind(addr).await?;
+fn rlimit_setnofile() -> Result<()> {
+    let (sort, hard) = getrlimit(Resource::NOFILE)?;
+    setrlimit(Resource::NOFILE, hard, hard)?;
 
-    let tok = token.clone();
-
-    loop {
-        select! {
-            _ = tok.cancelled() => { break }
-            _ = async {
-                let (stream, _) = listener.accept().await?;
-                let tok = token.clone();
-
-                tracker.spawn(async move { process(stream,max_frame_size, tok).await });
-
-                Ok::<_, io::Error>(())
-            }  => {}
-        }
-    }
-
-    Ok(())
-}
-
-#[instrument(skip_all, fields(?task = tokio::task::id(), ?local = stream.local_addr().unwrap(), ?peer = stream.peer_addr().unwrap()), ret, err, level = "trace")]
-async fn process(
-    stream: TcpStream,
-    max_frame_size: Option<usize>,
-    token: CancellationToken,
-) -> Result<()> {
-    let mut conn = Connection::new(Arc::new(Runtime::default()), stream, max_frame_size);
-
-    loop {
-        select! {
-            _ = token.cancelled() => {
-                conn.disconnect(Normal, "agent is shutting down").await?;
-
-                break
-            }
-            _ = conn.serve() => {}
-        }
-    }
+    debug!(from=?sort, to=?hard, "setnofile");
 
     Ok(())
 }

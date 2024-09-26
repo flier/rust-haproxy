@@ -19,3 +19,5 @@ pub use self::frames::Frame;
 pub use self::metadata::{Flags, FrameId, Metadata, StreamId};
 pub use self::msg::Message;
 pub use self::ty::Type;
+
+pub const MAX_FRAME_SIZE: usize = 16384;
