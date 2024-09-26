@@ -138,13 +138,15 @@ async fn serve(listener: TcpListener, max_frame_size: usize) -> Result<()> {
     let agent = Agent::new(listener, max_frame_size)?;
     let shutdown = agent.shutdown();
 
-    tokio::spawn(async move {
-        signal::ctrl_c().await.unwrap();
+    tokio::task::Builder::new()
+        .name("singal")
+        .spawn(async move {
+            signal::ctrl_c().await.unwrap();
 
-        debug!("received Ctrl+C");
+            debug!("received Ctrl+C");
 
-        shutdown.shutdown();
-    });
+            shutdown.shutdown();
+        })?;
 
     agent
         .serve(service_fn(|msgs: Vec<Message>| async {

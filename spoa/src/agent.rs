@@ -81,7 +81,11 @@ impl Agent {
                     let conn = Connection::new(runtime.clone(), stream, self.max_frame_size, service);
                     let tok = self.shutdown.token.child_token();
 
-                    self.shutdown.tracker.spawn(async move { process(conn, tok).await });
+                    tokio::task::Builder::new()
+                        .name("conn")
+                        .spawn(self.shutdown.tracker.track_future(async move {
+                            process(conn, tok).await
+                        }))?;
                 }
             }
         }
