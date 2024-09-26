@@ -19,6 +19,7 @@ use rlimit::{getrlimit, setrlimit, Resource};
 use tokio::signal;
 use tower::service_fn;
 use tracing::{debug, instrument};
+use tracing_subscriber::prelude::*;
 
 use haproxy::{
     agent::Agent,
@@ -66,7 +67,10 @@ struct Opt {
 }
 
 pub fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::registry()
+        .with(console_subscriber::spawn())
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
     let opt = Opt::parse();
     debug!(?opt);

@@ -15,10 +15,11 @@ haproxy-spop = { version = "0.1", path = "../spop" }
 anyhow.workspace = true
 bytes.workspace = true
 clap = { workspace = true, features = ["derive"] }
+console-subscriber.workspace = true
 daemonize.workspace = true
 net2.workspace = true
 rlimit.workspace = true
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tower = { workspace = true, features = ["util"] }
 tracing-futures.workspace = true
