@@ -81,6 +81,7 @@ impl From<Error> for Disconnect {
 pub trait Reason: Display + Debug + Send + Sync + 'static {}
 
 impl Reason for &'static str {}
+impl Reason for String {}
 
 pub trait Context<T, E> {
     fn context<C>(self, context: C) -> StdResult<T, Error>

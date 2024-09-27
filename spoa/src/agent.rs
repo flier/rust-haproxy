@@ -1,4 +1,7 @@
-use std::{convert::Infallible, net::TcpListener as StdTcpListener, sync::Arc};
+use std::convert::Infallible;
+use std::error::Error as StdError;
+use std::net::TcpListener as StdTcpListener;
+use std::sync::Arc;
 
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -54,6 +57,8 @@ impl Agent {
     pub async fn serve<S>(&self, service: S) -> Result<()>
     where
         S: Service<Vec<Message>, Response = Vec<Action>> + Clone + Send + 'static,
+        S::Error: StdError,
+        S::Future: Send,
     {
         let new_service = service_fn(|_: ()| async { Ok::<_, Infallible>(service.clone()) });
 
@@ -63,7 +68,9 @@ impl Agent {
     pub async fn make_serve<S, T>(&self, mut new_service: S, state: T) -> Result<()>
     where
         S: MakeService<T, Vec<Message>, Response = Vec<Action>, MakeError = Infallible>,
-        S::Service: Send + 'static,
+        S::Error: StdError,
+        S::Service: Service<Vec<Message>, Response = Vec<Action>> + Clone + Send + 'static,
+        <S::Service as Service<Vec<Message>>>::Future: Send,
         T: Clone,
     {
         let runtime = Arc::new(Runtime::default());
@@ -101,6 +108,9 @@ impl Agent {
 async fn process<IO, S>(mut conn: Connection<IO, S>, tok: CancellationToken) -> Result<()>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
+    S: Service<Vec<Message>, Response = Vec<Action>> + Clone + Send + 'static,
+    S::Error: StdError,
+    S::Future: Send,
 {
     select! {
         _ = tok.cancelled() => {

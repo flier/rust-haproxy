@@ -10,8 +10,6 @@ use crate::{
     spop::{AgentAck, FrameId, HaproxyNotify, Message, StreamId},
 };
 
-pub trait Dispatch {}
-
 #[derive(Debug, Clone)]
 pub struct Dispatcher {
     processing: UnboundedSender<(Acker, UnboundedReceiver<Message>)>,

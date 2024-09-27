@@ -9,6 +9,24 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct Reassembly<T>(Table<T>);
 
+impl<T> Default for Reassembly<T> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+impl<T> Reassembly<T> {
+    pub fn reassemble(
+        &self,
+        fragmented: bool,
+        stream_id: StreamId,
+        frame_id: FrameId,
+        value: Vec<T>,
+    ) -> Result<Option<Vec<T>>> {
+        self.0.reassemble(fragmented, (stream_id, frame_id), value)
+    }
+}
+
 impl AsyncHandler<Option<Vec<Message>>> for Reassembly<Message> {
     type Error = Error;
 
@@ -51,8 +69,14 @@ impl AsyncHandler<Option<Vec<Action>>> for Reassembly<Action> {
 #[derive(Clone, Debug)]
 pub struct Table<T>(DashMap<(StreamId, FrameId), Vec<T>>);
 
+impl<T> Default for Table<T> {
+    fn default() -> Self {
+        Self(DashMap::default())
+    }
+}
+
 impl<T> Table<T> {
-    fn reassemble(
+    pub fn reassemble(
         &self,
         fragmented: bool,
         key: (StreamId, FrameId),

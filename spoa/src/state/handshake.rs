@@ -36,7 +36,7 @@ pub fn negotiate(
     Ok(Negotiated {
         version,
         max_frame_size,
-        capabilities: capabilities.clone(),
+        capabilities: capabilities.into_iter().collect(),
     })
 }
 
@@ -44,15 +44,27 @@ pub fn negotiate(
 pub struct Negotiated {
     pub version: Version,
     pub max_frame_size: u32,
-    pub capabilities: Vec<Capability>,
+    pub capabilities: HashSet<Capability>,
 }
 
 impl Negotiated {
+    pub fn supports_async(&self) -> bool {
+        self.capabilities.contains(&Capability::Async)
+    }
+
+    pub fn supports_fragmentation(&self) -> bool {
+        self.capabilities.contains(&Capability::Fragmentation)
+    }
+
+    pub fn supports_pipelining(&self) -> bool {
+        self.capabilities.contains(&Capability::Pipelining)
+    }
+
     pub fn agent_hello(&self) -> AgentHello {
         AgentHello {
             version: self.version,
             max_frame_size: self.max_frame_size,
-            capabilities: self.capabilities.clone(),
+            capabilities: self.capabilities.iter().cloned().collect(),
         }
     }
 }
