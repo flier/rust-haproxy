@@ -108,3 +108,223 @@ impl Frame {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    use bytes::BufMut;
+
+    use crate::{
+        data::BufMutExt,
+        frame::{agent, decode, encode, haproxy, kv},
+        Action, Capability,
+        Error::*,
+        Scope::{self, *},
+        Version,
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_action() {
+        let actions = [
+            (
+                Action::SetVar {
+                    scope: Request,
+                    name: "foo".into(),
+                    value: "bar".into(),
+                },
+                {
+                    let mut v = vec![];
+                    encode::action(&mut v, Action::set_var(Scope::Request, "foo", "bar"));
+                    v
+                },
+            ),
+            (
+                Action::UnsetVar {
+                    scope: Response,
+                    name: "foo".into(),
+                },
+                {
+                    let mut v = vec![];
+                    encode::action(&mut v, Action::unset_var(Scope::Response, "foo"));
+                    v
+                },
+            ),
+        ];
+
+        for (a, b) in actions {
+            assert_eq!(a.size(), b.len());
+
+            let mut v = Vec::new();
+            encode::action(&mut v, a.clone());
+            assert_eq!(v, b, "encode::action({a:?}) -> {b:?}");
+
+            assert_eq!(
+                decode::action(b.as_slice()),
+                Some(a.clone()),
+                "action({b:?}) -> {a:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_frame() {
+        let frames = [
+            (
+                Frame::HaproxyHello(haproxy::Hello {
+                    supported_versions: vec![Version::V2_0],
+                    max_frame_size: 1024,
+                    capabilities: vec![Capability::Fragmentation, Capability::Async],
+                    healthcheck: None,
+                    engine_id: Some("foobar".into()),
+                }),
+                {
+                    let mut v = vec![frame::Type::HAPROXY_HELLO];
+                    encode::metadata(&mut v, Metadata::default());
+                    v.put_kv(kv::supported_versions(&[Version::V2_0]));
+                    v.put_kv(kv::max_frame_size(1024));
+                    v.put_kv(kv::capabilities(&[
+                        Capability::Fragmentation,
+                        Capability::Async,
+                    ]));
+                    v.put_kv(kv::engine_id("foobar"));
+                    v
+                },
+            ),
+            (
+                Frame::AgentHello(agent::Hello {
+                    version: Version::V2_0,
+                    max_frame_size: 1024,
+                    capabilities: vec![Capability::Fragmentation, Capability::Async],
+                }),
+                {
+                    let mut v = vec![frame::Type::AGENT_HELLO];
+                    encode::metadata(&mut v, Metadata::default());
+                    v.put_kv(kv::version(Version::V2_0));
+                    v.put_kv(kv::max_frame_size(1024));
+                    v.put_kv(kv::capabilities(&[
+                        Capability::Fragmentation,
+                        Capability::Async,
+                    ]));
+                    v
+                },
+            ),
+            (
+                Frame::HaproxyNotify(haproxy::Notify {
+                    fragmented: true,
+                    stream_id: 123,
+                    frame_id: 456,
+                    messages: vec![
+                        Message {
+                            name: "client".into(),
+                            args: vec![
+                                ("frontend".into(), "world".into()),
+                                ("src".into(), Ipv4Addr::new(127, 0, 0, 1).into()),
+                            ],
+                        },
+                        Message {
+                            name: "server".into(),
+                            args: vec![
+                                ("ip".into(), Ipv6Addr::LOCALHOST.into()),
+                                ("port".into(), 80u32.into()),
+                            ],
+                        },
+                    ],
+                }),
+                {
+                    let mut v = vec![frame::Type::HAPROXY_NOTIFY];
+                    encode::metadata(
+                        &mut v,
+                        Metadata {
+                            flags: frame::Flags::empty(),
+                            stream_id: 123,
+                            frame_id: 456,
+                        },
+                    );
+
+                    v.put_string("client");
+                    v.put_u8(2);
+                    v.put_kv(("frontend", "world"));
+                    v.put_kv(("src", Ipv4Addr::new(127, 0, 0, 1)));
+
+                    v.put_string("server");
+                    v.put_u8(2);
+                    v.put_kv(("ip", Ipv6Addr::LOCALHOST));
+                    v.put_kv(("port", 80u32));
+
+                    v
+                },
+            ),
+            (
+                Frame::AgentAck(agent::Ack {
+                    fragmented: false,
+                    aborted: true,
+                    stream_id: 123,
+                    frame_id: 456,
+                    actions: vec![
+                        Action::set_var(Scope::Request, "foo", "bar"),
+                        Action::unset_var(Scope::Response, "foo"),
+                    ],
+                }),
+                {
+                    let mut v = vec![frame::Type::AGENT_ACK];
+                    encode::metadata(
+                        &mut v,
+                        Metadata {
+                            flags: frame::Flags::FIN | frame::Flags::ABORT,
+                            stream_id: 123,
+                            frame_id: 456,
+                        },
+                    );
+
+                    encode::action(&mut v, Action::set_var(Scope::Request, "foo", "bar"));
+                    encode::action(&mut v, Action::unset_var(Scope::Response, "foo"));
+
+                    v
+                },
+            ),
+            (
+                Frame::HaproxyDisconnect(frame::Disconnect {
+                    status_code: BadVersion as u32,
+                    message: "bad version".into(),
+                }),
+                {
+                    let mut v = vec![frame::Type::HAPROXY_DISCON];
+                    encode::metadata(&mut v, Metadata::default());
+                    v.put_kv(kv::status_code(BadVersion as u32));
+                    v.put_kv(kv::message("bad version"));
+                    v
+                },
+            ),
+            (
+                Frame::AgentDisconnect(
+                    frame::Disconnect {
+                        status_code: BadFrameSize as u32,
+                        message: "bad frame size".into(),
+                    }
+                    .into(),
+                ),
+                {
+                    let mut v = vec![frame::Type::AGENT_DISCON];
+                    encode::metadata(&mut v, Metadata::default());
+                    v.put_kv(kv::status_code(BadFrameSize as u32));
+                    v.put_kv(kv::message("bad frame size"));
+                    v
+                },
+            ),
+        ];
+
+        for (f, b) in frames {
+            let mut v = Vec::new();
+            encode::frame(&mut v, f.clone());
+            assert_eq!(&v, &b, "encode frame: {f:?} to {b:?}");
+            assert_eq!(
+                decode::frame(b.as_slice()),
+                Ok(f.clone()),
+                "decode frame {f:?} from {b:?}"
+            );
+        }
+    }
+}

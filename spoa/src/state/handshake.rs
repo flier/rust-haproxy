@@ -1,78 +1,15 @@
+use std::cmp;
 use std::collections::HashSet;
-use std::{cmp, sync::Arc};
 
 use tracing::instrument;
 
 use crate::{
-    error::{Context as _, Result},
-    runtime::Runtime,
-    spop::{
-        AgentHello, Capability,
-        Error::{self, NoVersion},
-        Frame, HaproxyHello, Version, MAX_FRAME_SIZE,
-    },
-    state::{AsyncHandler, Processing, State},
+    error::Result,
+    spop::{AgentHello, Capability, Error::NoVersion, HaproxyHello, Version},
 };
 
-#[derive(Debug)]
-pub struct Handshaking {
-    pub runtime: Arc<Runtime>,
-    pub supported_versions: Vec<Version>,
-    pub max_frame_size: u32,
-    pub capabilities: Vec<Capability>,
-}
-
-impl Handshaking {
-    pub fn new(runtime: Arc<Runtime>) -> Self {
-        Handshaking {
-            runtime,
-            supported_versions: Version::SUPPORTED.to_vec(),
-            max_frame_size: MAX_FRAME_SIZE as u32,
-            capabilities: vec![
-                Capability::Fragmentation,
-                Capability::Async,
-                Capability::Pipelining,
-            ],
-        }
-    }
-}
-
-impl AsyncHandler for Handshaking {
-    async fn handle_frame(self, frame: Frame) -> Result<(State, Option<Frame>)> {
-        if let Frame::HaproxyHello(hello) = frame {
-            Ok(self.handshake(hello)?)
-        } else {
-            Err(Error::Invalid).context("expected HaproxyHello frame")
-        }
-    }
-}
-
-impl Handshaking {
-    #[instrument(ret, err, level = "trace")]
-    fn handshake(self, hello: HaproxyHello) -> Result<(State, Option<Frame>)> {
-        let Self {
-            runtime,
-            supported_versions,
-            max_frame_size,
-            capabilities,
-        } = self;
-
-        let is_healthcheck = hello.healthcheck.unwrap_or_default();
-        let handshaked = negotiate(supported_versions, max_frame_size, capabilities, hello)?;
-        let frame = handshaked.agent_hello().into();
-
-        if is_healthcheck {
-            Ok((State::Disconnected, Some(frame)))
-        } else {
-            let next = Processing::new(runtime, handshaked);
-
-            Ok((next.into(), Some(frame)))
-        }
-    }
-}
-
 #[instrument(ret, err, level = "trace")]
-fn negotiate(
+pub fn negotiate(
     mut supported_versions: Vec<Version>,
     max_frame_size: u32,
     capabilities: Vec<Capability>,

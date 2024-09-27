@@ -37,7 +37,7 @@ where
 
     pub async fn serve(&mut self) -> Result<()> {
         loop {
-            let state = mem::replace(&mut self.state, State::Disconnected);
+            let state = mem::replace(&mut self.state, State::Disconnecting);
             let frame = self.codec.read_frame().await?;
 
             match state.handle_frame(frame).await {

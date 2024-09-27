@@ -4,10 +4,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{
     error::{Error::*, Result},
-    frame::{
-        buf::{parse_frame, put_frame},
-        Frame,
-    },
+    frame::{BufExt, BufMutExt, Frame},
 };
 
 #[derive(Clone, Debug)]
@@ -28,14 +25,14 @@ impl Framer {
 
         let len = r.read_u32().await.map_err(|_| Io)? as usize;
         if len <= self.max_frame_size {
-            let buf = {
+            let mut buf = {
                 let mut buf = BytesMut::with_capacity(self.max_frame_size);
                 buf.resize(len, 0);
                 r.read_exact(&mut buf).await.map_err(|_| Io)?;
                 buf.freeze()
             };
 
-            parse_frame(buf).map_err(|_| Invalid)
+            buf.get_frame().map_err(|_| Invalid)
         } else {
             Err(BadFrameSize)
         }
@@ -49,7 +46,7 @@ impl Framer {
             let len = frame.size();
             let mut buf = BytesMut::with_capacity(Frame::LENGTH_SIZE + len);
             buf.put_u32(len as u32);
-            put_frame(&mut buf, frame);
+            buf.put_frame(frame);
             buf.freeze()
         };
 

@@ -25,7 +25,7 @@ pub struct Hello {
 }
 
 impl Hello {
-    pub(crate) fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         kv::supported_versions(&self.supported_versions).size()
             + kv::max_frame_size(self.max_frame_size).size()
             + kv::capabilities(&self.capabilities).size()
@@ -70,7 +70,7 @@ impl Notify {
     }
 
     /// Returns the size of the frame body in bytes.
-    pub(crate) fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.messages.iter().map(|msg| msg.size()).sum()
     }
 }

@@ -1,7 +1,8 @@
 pub mod agent;
-mod buf;
 mod codec;
+mod decode;
 mod disconnect;
+mod encode;
 mod fragment;
 mod framer;
 mod frames;
@@ -12,7 +13,9 @@ mod msg;
 mod ty;
 
 pub use self::codec::{BufCodec, Codec};
+pub use self::decode::BufExt;
 pub use self::disconnect::Disconnect;
+pub use self::encode::BufMutExt;
 pub use self::fragment::Reassembly;
 pub use self::framer::Framer;
 pub use self::frames::Frame;

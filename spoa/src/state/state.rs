@@ -7,7 +7,7 @@ use crate::{
     error::Result,
     runtime::Runtime,
     spop::Frame,
-    state::{Handshaking, Processing},
+    state::{Connecting, Processing},
 };
 
 pub trait AsyncHandler {
@@ -16,14 +16,14 @@ pub trait AsyncHandler {
 
 #[derive(Debug, From)]
 pub enum State {
-    Initialized(Handshaking),
+    Connecting(Connecting),
     Processing(Processing),
-    Disconnected,
+    Disconnecting,
 }
 
 impl State {
     pub fn new(rt: Arc<Runtime>) -> State {
-        State::Initialized(Handshaking::new(rt))
+        State::Connecting(Connecting::new(rt))
     }
 }
 
@@ -31,9 +31,9 @@ impl AsyncHandler for State {
     #[instrument(skip(self), ret, err, level = "trace")]
     async fn handle_frame(self, frame: Frame) -> Result<(State, Option<Frame>)> {
         match self {
-            State::Initialized(handshaking) => handshaking.handle_frame(frame).await,
+            State::Connecting(handshaking) => handshaking.handle_frame(frame).await,
             State::Processing(processing) => processing.handle_frame(frame).await,
-            State::Disconnected => Ok((State::Disconnected, None)),
+            State::Disconnecting => Ok((State::Disconnecting, None)),
         }
     }
 }
