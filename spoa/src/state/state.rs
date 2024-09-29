@@ -1,8 +1,7 @@
 use std::{error::Error as StdError, sync::Arc};
 
 use derive_more::{Debug, From};
-use tower::Service;
-use tracing::instrument;
+use tower::MakeService;
 
 use crate::{
     error::Result,
@@ -11,33 +10,42 @@ use crate::{
     state::{Connecting, Processing},
 };
 
-pub trait AsyncHandler<S> {
-    async fn handle_frame(self, frame: Frame) -> Result<(State<S>, Option<Frame>)>;
+pub trait AsyncHandler<S, T>
+where
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+{
+    async fn handle_frame(self, frame: Frame) -> Result<(State<S, T>, Option<Frame>)>;
 }
 
 #[derive(Debug, From)]
-pub enum State<S> {
-    Connecting(Connecting<S>),
-    Processing(Processing<S>),
+pub enum State<S, T>
+where
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+{
+    Connecting(Connecting<S, T>),
+    Processing(Processing<S, T>),
     Disconnecting,
 }
 
-impl<S> State<S> {
-    pub fn new(rt: Arc<Runtime>, service: S) -> State<S> {
-        State::Connecting(Connecting::new(rt, service))
+impl<S, T> State<S, T>
+where
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+{
+    pub fn new(rt: Arc<Runtime<S, T>>) -> State<S, T> {
+        State::Connecting(Connecting::new(rt))
     }
 }
 
-impl<S> AsyncHandler<S> for State<S>
+impl<S, T> AsyncHandler<S, T> for State<S, T>
 where
-    S: Service<Vec<Message>, Response = Vec<Action>> + Clone + Send + 'static,
-    S::Error: StdError,
-    S::Future: Send,
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+    S::MakeError: StdError + Send + Sync + 'static,
+    S::Error: StdError + Send + Sync + 'static,
+    T: Clone,
 {
-    #[instrument(skip(self), ret, err, level = "trace")]
-    async fn handle_frame(self, frame: Frame) -> Result<(State<S>, Option<Frame>)> {
+    async fn handle_frame(self, frame: Frame) -> Result<(State<S, T>, Option<Frame>)> {
         match self {
-            State::Connecting(handshaking) => handshaking.handle_frame(frame).await,
+            State::Connecting(connecting) => connecting.handle_frame(frame).await,
             State::Processing(processing) => processing.handle_frame(frame).await,
             State::Disconnecting => Ok((State::Disconnecting, None)),
         }

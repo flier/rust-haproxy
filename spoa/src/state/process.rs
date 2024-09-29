@@ -1,45 +1,52 @@
-use std::{error::Error as StdError, sync::Arc};
+use std::error::Error as StdError;
+use std::sync::Arc;
 
 use derive_more::Debug;
-use tokio::{sync::oneshot, time::timeout};
-use tower::Service;
-use tracing::{info, instrument};
+use tokio::time::timeout;
+use tower::{MakeService, Service};
+use tracing::info;
 
 use crate::{
     error::{Context, Result},
     runtime::Runtime,
-    spop::{Action, AgentAck, Disconnect, Error::*, Frame, HaproxyNotify, Message, Reassembly},
+    spop::{Action, Disconnect, Error::*, Frame, HaproxyNotify, Message, Reassembly},
     state::{AsyncHandler, State},
 };
 
 #[derive(Debug)]
-pub struct Processing<S> {
-    pub runtime: Arc<Runtime>,
+pub struct Processing<S, T>
+where
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+{
+    pub runtime: Arc<Runtime<S, T>>,
     #[debug(skip)]
-    pub service: S,
+    pub service: S::Service,
     pub reassembly: Option<Reassembly<Message>>,
-    pub pending: Vec<oneshot::Receiver<AgentAck>>,
 }
 
-impl<S> Processing<S> {
-    pub fn new(runtime: Arc<Runtime>, service: S, reassembly: Option<Reassembly<Message>>) -> Self {
+impl<S, T> Processing<S, T>
+where
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+{
+    pub fn new(
+        runtime: Arc<Runtime<S, T>>,
+        service: S::Service,
+        reassembly: Option<Reassembly<Message>>,
+    ) -> Self {
         Self {
             runtime,
             service,
             reassembly,
-            pending: vec![],
         }
     }
 }
 
-impl<S> AsyncHandler<S> for Processing<S>
+impl<S, T> AsyncHandler<S, T> for Processing<S, T>
 where
-    S: Service<Vec<Message>, Response = Vec<Action>> + Clone + Send + 'static,
-    S::Error: StdError,
-    S::Future: Send,
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+    S::Error: StdError + Send + Sync + 'static,
 {
-    #[instrument(skip(self), ret, err, level = "trace")]
-    async fn handle_frame(self, frame: Frame) -> Result<(State<S>, Option<Frame>)> {
+    async fn handle_frame(mut self, frame: Frame) -> Result<(State<S, T>, Option<Frame>)> {
         match frame {
             Frame::HaproxyNotify(HaproxyNotify {
                 fragmented,
@@ -58,9 +65,7 @@ where
                     .flatten();
 
                 if let Some(msgs) = msgs {
-                    let mut service = self.service.clone();
-
-                    match timeout(self.runtime.max_process_time, service.call(msgs)).await {
+                    match timeout(self.runtime.max_process_time, self.service.call(msgs)).await {
                         Ok(res) => match res {
                             Ok(actions) => {
                                 let ack = Frame::ack(stream_id, frame_id, actions);

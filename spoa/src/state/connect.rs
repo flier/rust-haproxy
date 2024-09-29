@@ -1,42 +1,50 @@
+use std::error::Error as StdError;
 use std::sync::Arc;
 
 use derive_more::Debug;
-use tracing::instrument;
+use tower::MakeService;
 
 use crate::{
     error::{Context as _, Result},
     runtime::Runtime,
-    spop::{Error, Frame, HaproxyHello, Reassembly},
+    spop::{Action, Error, Frame, HaproxyHello, Message, Reassembly},
     state::{handshake::negotiate, AsyncHandler, Processing, State},
 };
 
 #[derive(Debug)]
-pub struct Connecting<S> {
-    pub runtime: Arc<Runtime>,
-    #[debug(skip)]
-    pub service: S,
+pub struct Connecting<S, T> {
+    pub runtime: Arc<Runtime<S, T>>,
 }
 
-impl<S> Connecting<S> {
-    pub fn new(runtime: Arc<Runtime>, service: S) -> Self {
-        Connecting { runtime, service }
+impl<S, T> Connecting<S, T> {
+    pub fn new(runtime: Arc<Runtime<S, T>>) -> Self {
+        Connecting { runtime }
     }
 }
 
-impl<S> AsyncHandler<S> for Connecting<S> {
-    async fn handle_frame(self, frame: Frame) -> Result<(State<S>, Option<Frame>)> {
+impl<S, T> AsyncHandler<S, T> for Connecting<S, T>
+where
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+    S::MakeError: StdError + Send + Sync + 'static,
+    T: Clone,
+{
+    async fn handle_frame(self, frame: Frame) -> Result<(State<S, T>, Option<Frame>)> {
         if let Frame::HaproxyHello(hello) = frame {
-            Ok(self.handshake(hello)?)
+            self.handshake(hello).await
         } else {
             Err(Error::Invalid).context("expected HaproxyHello frame")
         }
     }
 }
 
-impl<S> Connecting<S> {
-    #[instrument(skip(self), ret, err, level = "trace")]
-    fn handshake(self, hello: HaproxyHello) -> Result<(State<S>, Option<Frame>)> {
-        let Self { runtime, service } = self;
+impl<S, T> Connecting<S, T>
+where
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+    S::MakeError: StdError + Send + Sync + 'static,
+    T: Clone,
+{
+    async fn handshake(self, hello: HaproxyHello) -> Result<(State<S, T>, Option<Frame>)> {
+        let Self { runtime } = self;
 
         let is_healthcheck = hello.healthcheck.unwrap_or_default();
         let handshaked = {
@@ -52,6 +60,8 @@ impl<S> Connecting<S> {
         if is_healthcheck {
             Ok((State::Disconnecting, Some(frame)))
         } else {
+            let service = runtime.service_maker.write().await.make().await?;
+
             let next = Processing::new(
                 runtime,
                 service,

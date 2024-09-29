@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
@@ -9,7 +8,7 @@ use tokio::{
     select,
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use tower::{service_fn, MakeService, Service};
+use tower::{MakeService, Service};
 use tracing::{debug, instrument, trace};
 
 use crate::{
@@ -19,14 +18,14 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct Agent {
-    runtime: Arc<Runtime>,
+pub struct Agent<S, T> {
+    runtime: Arc<Runtime<S, T>>,
     listener: TcpListener,
     shutdown: Shutdown,
 }
 
-impl Agent {
-    pub fn new(runtime: Arc<Runtime>, listener: StdTcpListener) -> Result<Agent> {
+impl<S, T> Agent<S, T> {
+    pub fn new(runtime: Arc<Runtime<S, T>>, listener: StdTcpListener) -> Result<Self> {
         let listener = TcpListener::from_std(listener)?;
 
         Ok(Agent {
@@ -53,26 +52,17 @@ impl Shutdown {
     }
 }
 
-impl Agent {
-    pub async fn serve<S>(&self, service: S) -> Result<()>
-    where
-        S: Service<Vec<Message>, Response = Vec<Action>> + Clone + Send + 'static,
-        S::Error: StdError,
-        S::Future: Send,
-    {
-        let new_service = service_fn(|_: ()| async { Ok::<_, Infallible>(service.clone()) });
-
-        self.make_serve(new_service, ()).await
-    }
-
-    pub async fn make_serve<S, T>(&self, mut new_service: S, state: T) -> Result<()>
-    where
-        S: MakeService<T, Vec<Message>, Response = Vec<Action>, MakeError = Infallible>,
-        S::Error: StdError,
-        S::Service: Service<Vec<Message>, Response = Vec<Action>> + Clone + Send + 'static,
-        <S::Service as Service<Vec<Message>>>::Future: Send,
-        T: Clone,
-    {
+impl<S, T> Agent<S, T>
+where
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>> + Send + Sync + 'static,
+    S::Service: Send,
+    <S::Service as Service<Vec<Message>>>::Future: Send + 'static,
+    S::MakeError: StdError + Send + Sync + 'static,
+    S::Future: Send,
+    S::Error: StdError + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+{
+    pub async fn serve(&self) -> Result<()> {
         loop {
             select! {
                 _ = self.shutdown.token.cancelled() => {
@@ -82,8 +72,7 @@ impl Agent {
                 Ok((stream, peer)) = self.listener.accept() => {
                     trace!(?peer, "accepted connection");
 
-                    let service = new_service.make_service(state.clone()).await.unwrap();
-                    let conn = Connection::new(self.runtime.clone(), stream, service);
+                    let conn = Connection::new(self.runtime.clone(), stream);
                     let tok = self.shutdown.token.child_token();
 
                     tokio::task::Builder::new()
@@ -103,12 +92,13 @@ impl Agent {
 }
 
 #[instrument(skip_all, fields(?task = tokio::task::id()), err, level = "trace")]
-async fn process<IO, S>(mut conn: Connection<IO, S>, tok: CancellationToken) -> Result<()>
+async fn process<IO, S, T>(mut conn: Connection<IO, S, T>, tok: CancellationToken) -> Result<()>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
-    S: Service<Vec<Message>, Response = Vec<Action>> + Clone + Send + 'static,
-    S::Error: StdError,
-    S::Future: Send,
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+    S::MakeError: StdError + Send + Sync + 'static,
+    S::Error: StdError + Send + Sync + 'static,
+    T: Clone,
 {
     select! {
         _ = tok.cancelled() => {

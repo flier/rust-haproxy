@@ -24,7 +24,7 @@ use tracing::{debug, instrument};
 use tracing_subscriber::prelude::*;
 
 use haproxy::{
-    agent::{Agent, Runtime, MAX_PROCESS_TIME},
+    agent::{runtime, Agent, Runtime},
     proto::{Action, Capability, Message, MAX_FRAME_SIZE},
 };
 
@@ -43,6 +43,10 @@ struct Opt {
     #[arg(short, long, default_value_t = 10)]
     backlog: i32,
 
+    /// Specify the number of workers
+    #[arg(short, long)]
+    num_workers: Option<usize>,
+
     /// Enable the support of the specified capability.
     #[arg(short, long, value_enum, default_values_t = [Capability::Pipelining])]
     capability: Vec<Capability>,
@@ -52,7 +56,7 @@ struct Opt {
     max_frame_size: u32,
 
     /// Set a delay to process a message
-    #[arg(short = 't', long, default_value_t = MAX_PROCESS_TIME.into())]
+    #[arg(short = 't', long, default_value_t = runtime::MAX_PROCESS_TIME.into())]
     processing_delay: Duration,
 
     /// Run this program as a daemon.
@@ -78,13 +82,18 @@ pub fn main() -> Result<()> {
     debug!(?opt);
 
     let runtime = {
-        let mut b = Runtime::builder();
-
-        b.capabilities(opt.capability.iter().copied())
+        runtime::Builder::new()
+            .capabilities(opt.capability.iter().copied())
             .max_frame_size(opt.max_frame_size)
-            .max_process_time(opt.processing_delay.into());
-
-        b.build()
+            .max_process_time(opt.processing_delay.into())
+            .make_service(
+                service_fn(|_: ()| async {
+                    Ok::<_, Infallible>(service_fn(|msgs: Vec<Message>| async {
+                        Ok::<_, Infallible>(vec![])
+                    }))
+                }),
+                (),
+            )
     };
     let listener = {
         let listen = {
@@ -110,7 +119,34 @@ pub fn main() -> Result<()> {
         }
     };
 
-    serve(runtime, listener)
+    rlimit_setnofile()?;
+
+    let rt = {
+        let mut b = tokio::runtime::Builder::new_multi_thread();
+        if let Some(n) = opt.num_workers {
+            b.worker_threads(n);
+        }
+        b.thread_name("worker").enable_all().build()?
+    };
+
+    rt.block_on(async move {
+        let agent = Agent::new(runtime, listener)?;
+        let shutdown = agent.shutdown();
+
+        tokio::task::Builder::new()
+            .name("singal")
+            .spawn(async move {
+                signal::ctrl_c().await.unwrap();
+
+                debug!("received Ctrl+C");
+
+                shutdown.shutdown();
+            })?;
+
+        agent.serve().await
+    })?;
+
+    Ok(())
 }
 
 #[instrument(skip_all, err)]
@@ -144,31 +180,25 @@ where
     daemonize.start().context("daemonize")?.context("listen")
 }
 
-#[tokio::main]
-async fn serve(runtime: Arc<Runtime>, listener: TcpListener) -> Result<()> {
-    rlimit_setnofile()?;
+// #[tokio::main]
+// async fn serve<S, T>(runtime: Arc<Runtime<S, T>>, listener: TcpListener) -> Result<()> {
+//     let agent = Agent::new(runtime, listener)?;
+//     let shutdown = agent.shutdown();
 
-    let agent = Agent::new(runtime, listener)?;
-    let shutdown = agent.shutdown();
+//     tokio::task::Builder::new()
+//         .name("singal")
+//         .spawn(async move {
+//             signal::ctrl_c().await.unwrap();
 
-    tokio::task::Builder::new()
-        .name("singal")
-        .spawn(async move {
-            signal::ctrl_c().await.unwrap();
+//             debug!("received Ctrl+C");
 
-            debug!("received Ctrl+C");
+//             shutdown.shutdown();
+//         })?;
 
-            shutdown.shutdown();
-        })?;
+//     agent.serve().await?;
 
-    agent
-        .serve(service_fn(|msgs: Vec<Message>| async {
-            Ok::<_, Infallible>(vec![])
-        }))
-        .await?;
-
-    Ok(())
-}
+//     Ok(())
+// }
 
 fn rlimit_setnofile() -> Result<()> {
     let (sort, hard) = getrlimit(Resource::NOFILE)?;

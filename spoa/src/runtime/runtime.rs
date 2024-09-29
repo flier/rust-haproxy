@@ -1,46 +1,56 @@
+use std::error::Error as StdError;
 use std::time::Duration;
 
-use haproxy_spop::MAX_FRAME_SIZE;
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::{mpsc::unbounded_channel, RwLock};
+use tower::MakeService;
 
 use crate::{
-    runtime::{Builder, Dispatcher, Processor},
+    error::{Context, Result},
+    runtime::{Dispatcher, Processor},
     spop::{Capability, Version},
 };
 
 #[derive(Debug)]
-pub struct Runtime {
+pub struct ServiceMaker<S, T> {
+    maker: S,
+    state: T,
+}
+
+impl<S, T> ServiceMaker<S, T> {
+    pub async fn make<REQ>(&mut self) -> Result<S::Service>
+    where
+        S: MakeService<T, REQ>,
+        S::MakeError: StdError + Send + Sync + 'static,
+        T: Clone,
+    {
+        self.maker
+            .make_service(self.state.clone())
+            .await
+            .context("make service")
+    }
+}
+
+#[derive(Debug)]
+pub struct Runtime<S, T> {
     pub dispatcher: Dispatcher,
     pub processor: Processor,
     pub supported_versions: Vec<Version>,
     pub capabilities: Vec<Capability>,
     pub max_frame_size: u32,
     pub max_process_time: Duration,
+    pub service_maker: RwLock<ServiceMaker<S, T>>,
 }
 
 pub const MAX_PROCESS_TIME: Duration = Duration::from_secs(15);
 
-impl Default for Runtime {
-    fn default() -> Self {
-        Runtime::new(
-            vec![Version::V2_0],
-            vec![
-                Capability::Fragmentation,
-                Capability::Pipelining,
-                Capability::Async,
-            ],
-            MAX_FRAME_SIZE,
-            MAX_PROCESS_TIME,
-        )
-    }
-}
-
-impl Runtime {
+impl<S, T> Runtime<S, T> {
     pub fn new(
         supported_versions: Vec<Version>,
         capabilities: Vec<Capability>,
         max_frame_size: u32,
         max_process_time: Duration,
+        make_service: S,
+        make_state: T,
     ) -> Self {
         let (sender, receiver) = unbounded_channel();
 
@@ -51,10 +61,10 @@ impl Runtime {
             capabilities,
             max_frame_size,
             max_process_time,
+            service_maker: RwLock::new(ServiceMaker {
+                maker: make_service,
+                state: make_state,
+            }),
         }
-    }
-
-    pub fn builder() -> Builder {
-        Builder::default()
     }
 }

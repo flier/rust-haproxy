@@ -4,7 +4,7 @@ use std::mem;
 use std::sync::Arc;
 
 use tokio::io::{AsyncRead, AsyncWrite};
-use tower::Service;
+use tower::MakeService;
 use tracing::instrument;
 
 use crate::runtime::Runtime;
@@ -16,19 +16,23 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct Connection<IO, S> {
+pub struct Connection<IO, S, T>
+where
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+{
     codec: BufCodec<IO>,
-    state: State<S>,
+    state: State<S, T>,
 }
 
-impl<IO, S> Connection<IO, S>
+impl<IO, S, T> Connection<IO, S, T>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
 {
-    pub fn new(runtime: Arc<Runtime>, io: IO, service: S) -> Self {
+    pub fn new(runtime: Arc<Runtime<S, T>>, io: IO) -> Self {
         let framer = Framer::new(runtime.max_frame_size);
         let codec = Codec::buffered(io, framer);
-        let state = State::new(runtime, service);
+        let state = State::new(runtime);
 
         Connection { codec, state }
     }
@@ -44,12 +48,13 @@ where
     }
 }
 
-impl<IO, S> Connection<IO, S>
+impl<IO, S, T> Connection<IO, S, T>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
-    S: Service<Vec<Message>, Response = Vec<Action>> + Clone + Send + 'static,
-    S::Error: StdError,
-    S::Future: Send,
+    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
+    S::MakeError: StdError + Send + Sync + 'static,
+    S::Error: StdError + Send + Sync + 'static,
+    T: Clone,
 {
     pub async fn serve(&mut self) -> Result<()> {
         loop {
