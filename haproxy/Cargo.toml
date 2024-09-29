@@ -6,6 +6,10 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = []
+clap = ["haproxy-spop/clap"]
+
 [dependencies]
 haproxy-spoa = { version = "0.1", path = "../spoa" }
 haproxy-spoe = { version = "0.1", path = "../spoe" }
@@ -17,6 +21,7 @@ bytes.workspace = true
 clap = { workspace = true, features = ["derive"] }
 console-subscriber.workspace = true
 daemonize.workspace = true
+humantime.workspace = true
 net2.workspace = true
 rlimit.workspace = true
 tokio = { workspace = true, features = ["full", "tracing"] }
@@ -25,3 +30,7 @@ tower = { workspace = true, features = ["util"] }
 tracing-futures.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
+
+[[example]]
+name = "traffic-mirror"
+required-features = ["clap"]

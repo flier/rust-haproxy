@@ -3,6 +3,7 @@ use parse_display::{Display, FromStr};
 /// The capabilities supported by HAProxy
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Display, FromStr)]
 #[display(style = "snake_case")]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum Capability {
     /// This is the ability for a peer to support fragmented payload in received frames.
     Fragmentation,

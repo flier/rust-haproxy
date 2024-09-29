@@ -10,11 +10,13 @@ use std::fs::create_dir_all;
 use std::io;
 use std::net::TcpListener;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::{convert::Infallible, fs::File};
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use daemonize::Daemonize;
+use humantime::Duration;
 use rlimit::{getrlimit, setrlimit, Resource};
 use tokio::signal;
 use tower::service_fn;
@@ -22,7 +24,7 @@ use tracing::{debug, instrument};
 use tracing_subscriber::prelude::*;
 
 use haproxy::{
-    agent::Agent,
+    agent::{Agent, Runtime, MAX_PROCESS_TIME},
     proto::{Action, Capability, Message, MAX_FRAME_SIZE},
 };
 
@@ -42,16 +44,16 @@ struct Opt {
     backlog: i32,
 
     /// Enable the support of the specified capability.
-    #[arg(short, long, value_enum)]
+    #[arg(short, long, value_enum, default_values_t = [Capability::Pipelining])]
     capability: Vec<Capability>,
 
     /// Specify the maximum frame size
     #[arg(short, long, default_value_t = MAX_FRAME_SIZE)]
-    max_frame_size: usize,
+    max_frame_size: u32,
 
     /// Set a delay to process a message
-    #[arg(short = 't', long)]
-    processing_delay: Option<usize>,
+    #[arg(short = 't', long, default_value_t = MAX_PROCESS_TIME.into())]
+    processing_delay: Duration,
 
     /// Run this program as a daemon.
     #[arg(short = 'D', long)]
@@ -75,29 +77,40 @@ pub fn main() -> Result<()> {
     let opt = Opt::parse();
     debug!(?opt);
 
-    let listen = {
-        let Opt {
-            addr,
-            port,
-            backlog,
-            ..
-        } = opt;
+    let runtime = {
+        let mut b = Runtime::builder();
 
-        move || {
-            net2::TcpBuilder::new_v4()?
-                .reuse_address(true)?
-                .bind((addr, port))?
-                .listen(backlog)
+        b.capabilities(opt.capability.iter().copied())
+            .max_frame_size(opt.max_frame_size)
+            .max_process_time(opt.processing_delay.into());
+
+        b.build()
+    };
+    let listener = {
+        let listen = {
+            let Opt {
+                addr,
+                port,
+                backlog,
+                ..
+            } = opt;
+
+            move || {
+                net2::TcpBuilder::new_v4()?
+                    .reuse_address(true)?
+                    .bind((addr, port))?
+                    .listen(backlog)
+            }
+        };
+
+        if opt.daemonize {
+            daemonize(listen, opt.pid_file, opt.chroot)?
+        } else {
+            listen()?
         }
     };
 
-    let listener = if opt.daemonize {
-        daemonize(listen, opt.pid_file, opt.chroot)?
-    } else {
-        listen()?
-    };
-
-    serve(listener, opt.max_frame_size)
+    serve(runtime, listener)
 }
 
 #[instrument(skip_all, err)]
@@ -132,10 +145,10 @@ where
 }
 
 #[tokio::main]
-async fn serve(listener: TcpListener, max_frame_size: usize) -> Result<()> {
+async fn serve(runtime: Arc<Runtime>, listener: TcpListener) -> Result<()> {
     rlimit_setnofile()?;
 
-    let agent = Agent::new(listener, max_frame_size)?;
+    let agent = Agent::new(runtime, listener)?;
     let shutdown = agent.shutdown();
 
     tokio::task::Builder::new()

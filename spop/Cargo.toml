@@ -9,6 +9,10 @@ Stream Processing Offload Protocol, used by SPOEs to talk to SPOA servers.
 This protocol is used by engines to talk to agents.
 """
 
+[features]
+default = []
+clap = ["dep:clap"]
+
 [dependencies]
 bitflags.workspace = true
 bytes.workspace = true
@@ -22,6 +26,8 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 tower = { workspace = true, features = ["util"] }
 tracing.workspace = true
+
+clap = { workspace = true, features = ["derive"], optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }

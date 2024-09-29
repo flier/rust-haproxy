@@ -13,6 +13,7 @@ dashmap = "6.1"
 derive_more = { version = "1", features = ["full"] }
 futures = "0.3"
 hexplay = "0.3"
+humantime = "2.1"
 lazy_static = "1.5"
 net2 = "0.2"
 num_enum = "0.7"

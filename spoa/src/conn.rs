@@ -25,8 +25,8 @@ impl<IO, S> Connection<IO, S>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
 {
-    pub fn new(runtime: Arc<Runtime>, io: IO, max_frame_size: usize, service: S) -> Self {
-        let framer = Framer::new(max_frame_size);
+    pub fn new(runtime: Arc<Runtime>, io: IO, service: S) -> Self {
+        let framer = Framer::new(runtime.max_frame_size);
         let codec = Codec::buffered(io, framer);
         let state = State::new(runtime, service);
 

@@ -9,11 +9,11 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct Framer {
-    max_frame_size: usize,
+    max_frame_size: u32,
 }
 
 impl Framer {
-    pub fn new(max_frame_size: usize) -> Framer {
+    pub fn new(max_frame_size: u32) -> Framer {
         Framer { max_frame_size }
     }
 
@@ -23,11 +23,11 @@ impl Framer {
     {
         pin_mut!(r);
 
-        let len = r.read_u32().await.map_err(|_| Io)? as usize;
+        let len = r.read_u32().await.map_err(|_| Io)?;
         if len <= self.max_frame_size {
             let mut buf = {
-                let mut buf = BytesMut::with_capacity(self.max_frame_size);
-                buf.resize(len, 0);
+                let mut buf = BytesMut::with_capacity(self.max_frame_size as usize);
+                buf.resize(len as usize, 0);
                 r.read_exact(&mut buf).await.map_err(|_| Io)?;
                 buf.freeze()
             };

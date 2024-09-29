@@ -23,4 +23,4 @@ pub use self::metadata::{Flags, FrameId, Metadata, StreamId};
 pub use self::msg::Message;
 pub use self::ty::Type;
 
-pub const MAX_FRAME_SIZE: usize = 16384;
+pub const MAX_FRAME_SIZE: u32 = 16384;

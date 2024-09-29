@@ -20,18 +20,18 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Agent {
+    runtime: Arc<Runtime>,
     listener: TcpListener,
-    max_frame_size: usize,
     shutdown: Shutdown,
 }
 
 impl Agent {
-    pub fn new(listener: StdTcpListener, max_frame_size: usize) -> Result<Agent> {
+    pub fn new(runtime: Arc<Runtime>, listener: StdTcpListener) -> Result<Agent> {
         let listener = TcpListener::from_std(listener)?;
 
         Ok(Agent {
+            runtime,
             listener,
-            max_frame_size,
             shutdown: Shutdown::default(),
         })
     }
@@ -73,8 +73,6 @@ impl Agent {
         <S::Service as Service<Vec<Message>>>::Future: Send,
         T: Clone,
     {
-        let runtime = Arc::new(Runtime::default());
-
         loop {
             select! {
                 _ = self.shutdown.token.cancelled() => {
@@ -85,7 +83,7 @@ impl Agent {
                     trace!(?peer, "accepted connection");
 
                     let service = new_service.make_service(state.clone()).await.unwrap();
-                    let conn = Connection::new(runtime.clone(), stream, self.max_frame_size, service);
+                    let conn = Connection::new(self.runtime.clone(), stream, service);
                     let tok = self.shutdown.token.child_token();
 
                     tokio::task::Builder::new()
