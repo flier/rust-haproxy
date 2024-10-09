@@ -2,7 +2,7 @@
 name = "haproxy"
 version = "0.1.0"
 authors = ["Flier Lu <flier.lu@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -21,8 +21,10 @@ bytes.workspace = true
 clap = { workspace = true, features = ["derive"] }
 console-subscriber.workspace = true
 daemonize.workspace = true
+http.workspace = true
 humantime.workspace = true
 net2.workspace = true
+reqwest.workspace = true
 rlimit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 tokio-util = { workspace = true, features = ["rt"] }

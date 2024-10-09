@@ -4,6 +4,7 @@ mod agent;
 mod conn;
 mod error;
 mod handle;
+pub mod req;
 pub mod runtime;
 mod state;
 mod tcp;

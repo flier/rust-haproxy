@@ -2,6 +2,7 @@ use std::{
     error::Error as StdError,
     fmt::{Debug, Display},
     result::Result as StdResult,
+    str::Utf8Error,
 };
 
 use thiserror::Error;
@@ -22,7 +23,19 @@ pub enum Error {
     Status(#[from] crate::spop::Error),
 
     #[error(transparent)]
+    Utf8(#[from] Utf8Error),
+
+    #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    Http(#[from] http::Error),
+
+    #[error(transparent)]
+    InvalidHeaderName(#[from] http::header::InvalidHeaderName),
+
+    #[error(transparent)]
+    InvalidHeaderValue(#[from] http::header::InvalidHeaderValue),
 
     #[error(transparent)]
     Send(

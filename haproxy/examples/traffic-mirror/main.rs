@@ -5,6 +5,7 @@
 //! via the SPOP protocol.  All requests are replicated to the web address (URL)
 //! selected when running the program.
 
+use core::str;
 use std::env;
 use std::fs::create_dir_all;
 use std::io;
@@ -13,9 +14,12 @@ use std::result::Result as StdResult;
 use std::{convert::Infallible, fs::File};
 
 use anyhow::{Context, Result};
+use bytes::{Buf, Bytes};
 use clap::Parser;
 use daemonize::Daemonize;
+use http::Request;
 use humantime::Duration;
+use reqwest::Version;
 use rlimit::{getrlimit, setrlimit, Resource};
 use tokio::signal;
 use tower::service_fn;
@@ -23,8 +27,8 @@ use tracing::{debug, instrument};
 use tracing_subscriber::prelude::*;
 
 use haproxy::{
-    agent::{runtime, Agent, Runtime},
-    proto::{Action, Capability, Message, MAX_FRAME_SIZE},
+    agent::{req, runtime, Agent},
+    proto::{Action, Capability, Message, Typed, MAX_FRAME_SIZE},
 };
 
 #[derive(Debug, Parser)]
@@ -185,5 +189,90 @@ fn rlimit_setnofile() -> Result<()> {
 }
 
 async fn process_request(msgs: Vec<Message>) -> StdResult<Vec<Action>, haproxy::agent::Error> {
+    for msg in msgs.into_iter().filter(|msg| msg.name == "mirror") {
+        for (arg, value) in msg.args {
+            let mut builder = Builder::new();
+
+            match (arg.as_str(), value) {
+                ("arg_method", Typed::String(method)) => {
+                    builder.method(method);
+                }
+                ("arg_pathq", Typed::String(path)) => {
+                    builder.path(path);
+                }
+                ("arg_ver", Typed::String(version)) => {
+                    builder.version(version);
+                }
+                ("arg_hdrs", Typed::Binary(hdrs)) => {
+                    builder.headers(hdrs)?;
+                }
+                ("arg_body", Typed::Binary(body)) => {
+                    builder.body(body);
+                }
+                _ => debug!(%arg, "ignored"),
+            }
+
+            let req = builder.build()?;
+        }
+    }
+
     Ok(vec![])
+}
+
+pub struct Builder {
+    req: Option<http::request::Builder>,
+    body: Option<Bytes>,
+}
+
+impl Builder {
+    pub fn new() -> Builder {
+        Builder {
+            req: Some(http::request::Builder::new()),
+            body: None,
+        }
+    }
+
+    pub fn method<S: AsRef<str>>(&mut self, method: S) -> &mut Self {
+        self.req = self.req.take().map(|b| b.method(method.as_ref()));
+        self
+    }
+
+    pub fn path<S: AsRef<str>>(&mut self, path: S) -> &mut Self {
+        self.req = self.req.take().map(|b| b.uri(path.as_ref()));
+        self
+    }
+
+    pub fn version<S: AsRef<str>>(&mut self, version: S) -> &mut Self {
+        self.req = self.req.take().map(|b| {
+            b.version(match version.as_ref() {
+                "1.0" => Version::HTTP_10,
+                "1.1" => Version::HTTP_11,
+                "2.0" => Version::HTTP_2,
+                "3.0" => Version::HTTP_3,
+                v => panic!("unexpected http version {v}"),
+            })
+        });
+        self
+    }
+
+    pub fn headers<T: Buf>(&mut self, b: T) -> StdResult<&mut Self, haproxy::agent::Error> {
+        if let Some(hdrs) = self.req.as_mut().and_then(|b| b.headers_mut()) {
+            hdrs.extend(req::hdrs_bin(b)?)
+        };
+
+        Ok(self)
+    }
+
+    pub fn body(&mut self, b: Bytes) -> &mut Self {
+        self.body = Some(b);
+        self
+    }
+
+    pub fn build(mut self) -> StdResult<Request<Bytes>, haproxy::agent::Error> {
+        Ok(self
+            .req
+            .take()
+            .expect("request builder")
+            .body(self.body.unwrap_or_default())?)
+    }
 }

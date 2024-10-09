@@ -2,7 +2,7 @@
 name = "haproxy-spoa"
 version = "0.1.0"
 authors = ["Flier Lu <flier.lu@gmail.com>"]
-edition = "2018"
+edition = "2021"
 description = """
 Stream Processing Offload Agent.
 
@@ -17,9 +17,16 @@ dashmap.workspace = true
 derive_more.workspace = true
 futures.workspace = true
 hexplay.workspace = true
+http.workspace = true
 pin-project.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["net", "rt"] }
+tokio = { workspace = true, features = [
+    "macros",
+    "net",
+    "rt",
+    "time",
+    "tracing",
+] }
 tokio-util = { workspace = true, features = ["rt"] }
 tower = { workspace = true, features = ["make"] }
 tracing-futures.workspace = true
