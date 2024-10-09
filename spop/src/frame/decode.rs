@@ -62,7 +62,7 @@ fn frame_type<B: Buf>(buf: B) -> Option<frame::Type> {
 
 fn metadata<B: Buf>(mut buf: B) -> Option<frame::Metadata> {
     let flags = (buf.remaining() >= mem::size_of::<u32>())
-        .then(|| buf.get_u32_ne())
+        .then(|| buf.get_u32())
         .map(frame::Flags::from_bits_truncate)?;
     let stream_id = buf.varint()?;
     let frame_id = buf.varint()?;

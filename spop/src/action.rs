@@ -1,11 +1,6 @@
-use std::mem;
-
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
-use crate::{
-    data::{varint, Value},
-    Typed,
-};
+use crate::Typed;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
@@ -49,10 +44,6 @@ pub enum Action {
 }
 
 impl Action {
-    const TYPE_SIZE: usize = mem::size_of::<Type>();
-    const NB_ARGS_SIZE: usize = mem::size_of::<u8>();
-    const SCOPE_SIZE: usize = mem::size_of::<Scope>();
-
     /// Set the value for an existing variable.
     pub fn set_var<N, V>(scope: Scope, name: N, value: V) -> Self
     where
@@ -75,17 +66,5 @@ impl Action {
             scope,
             name: name.into(),
         }
-    }
-
-    pub(crate) fn size(&self) -> usize {
-        Self::TYPE_SIZE
-            + Self::NB_ARGS_SIZE
-            + Self::SCOPE_SIZE
-            + match self {
-                Action::SetVar { name, value, .. } => {
-                    varint::size_of(name.len() as u64) + name.len() + value.size()
-                }
-                Action::UnsetVar { name, .. } => varint::size_of(name.len() as u64) + name.len(),
-            }
     }
 }

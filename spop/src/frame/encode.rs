@@ -64,7 +64,7 @@ pub fn frame<B: BufMut>(mut buf: B, frame: Frame) {
 }
 
 pub fn metadata<B: BufMut>(mut buf: B, metadata: Metadata) {
-    buf.put_u32(metadata.flags.bits().to_be());
+    buf.put_u32(metadata.flags.bits());
     buf.put_varint(metadata.stream_id);
     buf.put_varint(metadata.frame_id);
 }

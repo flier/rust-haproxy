@@ -12,7 +12,7 @@ use crate::{
 pub struct Builder {
     pub supported_versions: HashSet<Version>,
     pub capabilities: HashSet<Capability>,
-    pub max_frame_size: Option<u32>,
+    pub max_frame_size: Option<usize>,
     pub max_process_time: Option<Duration>,
 }
 impl Builder {
@@ -53,13 +53,13 @@ impl Builder {
         self
     }
 
-    pub fn max_frame_size(mut self, sz: u32) -> Self {
+    pub fn max_frame_size(mut self, sz: usize) -> Self {
         self.max_frame_size = Some(sz);
         self
     }
 
-    pub fn max_process_time(mut self, d: Duration) -> Self {
-        self.max_process_time = Some(d);
+    pub fn max_process_time<D: Into<Duration>>(mut self, d: D) -> Self {
+        self.max_process_time = Some(d.into());
         self
     }
 
@@ -68,7 +68,11 @@ impl Builder {
         S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
     {
         Arc::new(Runtime::new(
-            self.supported_versions.into_iter().collect(),
+            if self.supported_versions.is_empty() {
+                vec![Version::V2_0]
+            } else {
+                self.supported_versions.into_iter().collect()
+            },
             self.capabilities.into_iter().collect(),
             self.max_frame_size.unwrap_or(MAX_FRAME_SIZE),
             self.max_process_time.unwrap_or(MAX_PROCESS_TIME),

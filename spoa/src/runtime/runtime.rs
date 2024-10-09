@@ -36,7 +36,7 @@ pub struct Runtime<S, T> {
     pub processor: Processor,
     pub supported_versions: Vec<Version>,
     pub capabilities: Vec<Capability>,
-    pub max_frame_size: u32,
+    pub max_frame_size: usize,
     pub max_process_time: Duration,
     pub service_maker: RwLock<ServiceMaker<S, T>>,
 }
@@ -47,7 +47,7 @@ impl<S, T> Runtime<S, T> {
     pub fn new(
         supported_versions: Vec<Version>,
         capabilities: Vec<Capability>,
-        max_frame_size: u32,
+        max_frame_size: usize,
         max_process_time: Duration,
         make_service: S,
         make_state: T,

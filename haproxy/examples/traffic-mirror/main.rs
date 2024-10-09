@@ -8,9 +8,8 @@
 use std::env;
 use std::fs::create_dir_all;
 use std::io;
-use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::result::Result as StdResult;
 use std::{convert::Infallible, fs::File};
 
 use anyhow::{Context, Result};
@@ -53,7 +52,7 @@ struct Opt {
 
     /// Specify the maximum frame size
     #[arg(short, long, default_value_t = MAX_FRAME_SIZE)]
-    max_frame_size: u32,
+    max_frame_size: usize,
 
     /// Set a delay to process a message
     #[arg(short = 't', long, default_value_t = runtime::MAX_PROCESS_TIME.into())]
@@ -83,33 +82,29 @@ pub fn main() -> Result<()> {
 
     let runtime = {
         runtime::Builder::new()
-            .capabilities(opt.capability.iter().copied())
+            .capabilities(opt.capability)
             .max_frame_size(opt.max_frame_size)
-            .max_process_time(opt.processing_delay.into())
+            .max_process_time(opt.processing_delay)
             .make_service(
                 service_fn(|_: ()| async {
-                    Ok::<_, Infallible>(service_fn(|msgs: Vec<Message>| async {
-                        Ok::<_, Infallible>(vec![])
-                    }))
+                    Ok::<_, Infallible>(service_fn(|msgs: Vec<Message>| process_request(msgs)))
                 }),
                 (),
             )
     };
     let listener = {
-        let listen = {
-            let Opt {
-                addr,
-                port,
-                backlog,
-                ..
-            } = opt;
+        let Opt {
+            addr,
+            port,
+            backlog,
+            ..
+        } = opt;
 
-            move || {
-                net2::TcpBuilder::new_v4()?
-                    .reuse_address(true)?
-                    .bind((addr, port))?
-                    .listen(backlog)
-            }
+        let listen = move || {
+            net2::TcpBuilder::new_v4()?
+                .reuse_address(true)?
+                .bind((addr, port))?
+                .listen(backlog)
         };
 
         if opt.daemonize {
@@ -121,7 +116,7 @@ pub fn main() -> Result<()> {
 
     rlimit_setnofile()?;
 
-    let rt = {
+    let rt: tokio::runtime::Runtime = {
         let mut b = tokio::runtime::Builder::new_multi_thread();
         if let Some(n) = opt.num_workers {
             b.worker_threads(n);
@@ -180,26 +175,6 @@ where
     daemonize.start().context("daemonize")?.context("listen")
 }
 
-// #[tokio::main]
-// async fn serve<S, T>(runtime: Arc<Runtime<S, T>>, listener: TcpListener) -> Result<()> {
-//     let agent = Agent::new(runtime, listener)?;
-//     let shutdown = agent.shutdown();
-
-//     tokio::task::Builder::new()
-//         .name("singal")
-//         .spawn(async move {
-//             signal::ctrl_c().await.unwrap();
-
-//             debug!("received Ctrl+C");
-
-//             shutdown.shutdown();
-//         })?;
-
-//     agent.serve().await?;
-
-//     Ok(())
-// }
-
 fn rlimit_setnofile() -> Result<()> {
     let (sort, hard) = getrlimit(Resource::NOFILE)?;
     setrlimit(Resource::NOFILE, hard, hard)?;
@@ -207,4 +182,8 @@ fn rlimit_setnofile() -> Result<()> {
     debug!(from=?sort, to=?hard, "setnofile");
 
     Ok(())
+}
+
+async fn process_request(msgs: Vec<Message>) -> StdResult<Vec<Action>, haproxy::agent::Error> {
+    Ok(vec![])
 }

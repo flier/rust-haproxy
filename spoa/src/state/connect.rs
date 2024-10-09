@@ -50,7 +50,7 @@ where
         let handshaked = {
             negotiate(
                 runtime.supported_versions.clone(),
-                runtime.max_frame_size,
+                runtime.max_frame_size as u32,
                 runtime.capabilities.clone(),
                 hello,
             )?
@@ -67,7 +67,7 @@ where
                 service,
                 handshaked
                     .supports_fragmentation()
-                    .then(|| Reassembly::default()),
+                    .then(Reassembly::default),
             );
 
             Ok((next.into(), Some(frame)))

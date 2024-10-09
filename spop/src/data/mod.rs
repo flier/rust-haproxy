@@ -9,4 +9,4 @@ pub mod varint;
 pub use self::buf::{BufExt, BufMutExt};
 pub use self::ty::{Flags, Type};
 pub use self::typed::Typed;
-pub use self::value::{KeyValue, Value};
+pub use self::value::KeyValue;

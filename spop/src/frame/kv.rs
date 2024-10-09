@@ -1,10 +1,7 @@
 use core::fmt;
 use std::{array::IntoIter, borrow::Cow, slice::Iter};
 
-use crate::{
-    data::{KeyValue, Value},
-    Capability, Typed, Version,
-};
+use crate::{data::KeyValue, Capability, Typed, Version};
 
 /* Predefined key used in HELLO/DISCONNECT frames */
 pub const SUPPORTED_VERSIONS_KEY: &str = "supported-versions";
@@ -38,17 +35,6 @@ where
                 .collect::<Vec<_>>()
                 .join(sep),
         )
-    }
-}
-
-impl<I, T> Value for Punctuated<I>
-where
-    I: Clone + ExactSizeIterator<Item = T>,
-    T: fmt::Display,
-{
-    fn size(&self) -> usize {
-        self.0.clone().map(|v| v.to_string().len()).sum::<usize>()
-            + self.1.len() * (self.0.len() - 1)
     }
 }
 

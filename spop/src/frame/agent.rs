@@ -1,8 +1,7 @@
 //! The frames send by agent.
 
 use crate::{
-    data::Value,
-    frame::{self, kv, Flags, FrameId, Metadata, StreamId},
+    frame::{self, Flags, FrameId, Metadata, StreamId},
     Action, Capability, Version,
 };
 
@@ -18,14 +17,6 @@ pub struct Hello {
     pub max_frame_size: u32,
     /// This a comma-separated list of capabilities supported by HAProxy.
     pub capabilities: Vec<Capability>,
-}
-
-impl Hello {
-    pub(crate) fn size(&self) -> usize {
-        kv::version(self.version).size()
-            + kv::max_frame_size(self.max_frame_size).size()
-            + kv::capabilities(&self.capabilities).size()
-    }
 }
 
 /// ACK frames must be sent by agents to reply to NOTIFY frames.
@@ -63,9 +54,5 @@ impl Ack {
             stream_id: self.stream_id,
             frame_id: self.frame_id,
         }
-    }
-
-    pub(crate) fn size(&self) -> usize {
-        self.actions.iter().map(|action| action.size()).sum()
     }
 }

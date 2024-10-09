@@ -207,7 +207,7 @@ fn put_bytes<T: BufMut, B: AsRef<[u8]>>(mut buf: T, b: B) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use crate::data::{Type, Typed::*, Value};
+    use crate::data::{Type, Typed::*};
 
     use super::*;
 
@@ -258,8 +258,6 @@ mod tests {
         ];
 
         for (v, b) in values {
-            assert_eq!(v.size(), b.len(), "len({v:?}) -> {}", b.len());
-
             let mut buf = Vec::new();
             assert_eq!(
                 buf.put_typed(v.clone()),

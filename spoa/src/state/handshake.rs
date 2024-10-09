@@ -8,7 +8,7 @@ use crate::{
     spop::{AgentHello, Capability, Error::NoVersion, HaproxyHello, Version},
 };
 
-#[instrument(ret, err, level = "trace")]
+#[instrument(ret, err, level = "debug")]
 pub fn negotiate(
     mut supported_versions: Vec<Version>,
     max_frame_size: u32,

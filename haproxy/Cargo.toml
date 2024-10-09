@@ -24,7 +24,7 @@ daemonize.workspace = true
 humantime.workspace = true
 net2.workspace = true
 rlimit.workspace = true
-tokio = { workspace = true, features = ["full", "tracing"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tower = { workspace = true, features = ["util"] }
 tracing-futures.workspace = true

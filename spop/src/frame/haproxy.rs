@@ -1,8 +1,7 @@
 //! The frames send by HAProxy.
 
 use crate::{
-    data::Value,
-    frame::{self, kv, Flags, FrameId, Message, Metadata, StreamId},
+    frame::{self, Flags, FrameId, Message, Metadata, StreamId},
     Capability, Version,
 };
 
@@ -22,24 +21,6 @@ pub struct Hello {
     pub healthcheck: Option<bool>,
     /// This is a uniq string that identify a SPOE engine.
     pub engine_id: Option<String>,
-}
-
-impl Hello {
-    pub fn size(&self) -> usize {
-        kv::supported_versions(&self.supported_versions).size()
-            + kv::max_frame_size(self.max_frame_size).size()
-            + kv::capabilities(&self.capabilities).size()
-            + if let Some(healthcheck) = self.healthcheck {
-                kv::healthcheck(healthcheck).size()
-            } else {
-                0
-            }
-            + if let Some(ref id) = self.engine_id {
-                kv::engine_id(id).size()
-            } else {
-                0
-            }
-    }
 }
 
 /// Information are sent to the agents inside NOTIFY frames.
@@ -67,10 +48,5 @@ impl Notify {
             stream_id: self.stream_id,
             frame_id: self.frame_id,
         }
-    }
-
-    /// Returns the size of the frame body in bytes.
-    pub fn size(&self) -> usize {
-        self.messages.iter().map(|msg| msg.size()).sum()
     }
 }

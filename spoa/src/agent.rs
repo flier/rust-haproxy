@@ -17,6 +17,12 @@ use crate::{
     Connection, Runtime,
 };
 
+pub trait Handler: Service<Vec<Message>, Response = Vec<Action>> {}
+
+pub trait MakeHandler<T>: MakeService<T, Vec<Message>, Response = Vec<Action>> {}
+
+impl<S, T> MakeHandler<T> for S where S: MakeService<T, Vec<Message>, Response = Vec<Action>> {}
+
 #[derive(Debug)]
 pub struct Agent<S, T> {
     runtime: Arc<Runtime<S, T>>,

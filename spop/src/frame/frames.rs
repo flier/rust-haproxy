@@ -1,5 +1,3 @@
-use std::mem;
-
 use derive_more::derive::{From, IsVariant, TryUnwrap};
 
 use crate::{
@@ -31,8 +29,6 @@ pub enum Frame {
 }
 
 impl Frame {
-    pub const LENGTH_SIZE: usize = mem::size_of::<u32>();
-
     pub fn frame_type(&self) -> Type {
         match self {
             Frame::Unset => Type::Unset,
@@ -82,24 +78,6 @@ impl Frame {
 }
 
 impl Frame {
-    const TYPE_SIZE: usize = mem::size_of::<u8>();
-
-    /// Returns the size of the frame.
-    pub fn size(&self) -> usize {
-        Self::TYPE_SIZE
-            + self.metadata().unwrap_or_default().size()
-            + match self {
-                Frame::Unset => 0,
-                Frame::HaproxyHello(hello) => hello.size(),
-                Frame::HaproxyNotify(notify) => notify.size(),
-                Frame::AgentHello(hello) => hello.size(),
-                Frame::AgentAck(ack) => ack.size(),
-                Frame::HaproxyDisconnect(disconnect) | Frame::AgentDisconnect(disconnect) => {
-                    disconnect.size()
-                }
-            }
-    }
-
     pub fn metadata(&self) -> Option<Metadata> {
         match self {
             Frame::HaproxyNotify(notify) => Some(notify.metadata()),
@@ -155,8 +133,6 @@ mod tests {
         ];
 
         for (a, b) in actions {
-            assert_eq!(a.size(), b.len());
-
             let mut v = Vec::new();
             encode::action(&mut v, a.clone());
             assert_eq!(v, b, "encode::action({a:?}) -> {b:?}");

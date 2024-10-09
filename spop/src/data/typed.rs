@@ -1,10 +1,7 @@
-use std::mem;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use bytes::{Bytes, BytesMut};
 use derive_more::{From, TryInto};
-
-use crate::data::Value;
 
 /// Typed data
 ///
@@ -96,31 +93,9 @@ impl From<IpAddr> for Typed {
     }
 }
 
-pub fn size_of_val<T: Value>(v: &T) -> usize {
-    Typed::TYPE_SIZE + v.size()
-}
-
 impl Typed {
     pub(crate) const IPV4_ADDR_LEN: usize = 4;
     pub(crate) const IPV6_ADDR_LEN: usize = 16;
 
-    pub(crate) const TYPE_SIZE: usize = mem::size_of::<u8>();
-}
-
-impl Value for Typed {
-    fn size(&self) -> usize {
-        Self::TYPE_SIZE
-            + match self {
-                Typed::Null => 0,
-                Typed::Boolean(b) => b.size(),
-                Typed::Int32(n) => n.size(),
-                Typed::Uint32(n) => n.size(),
-                Typed::Int64(n) => n.size(),
-                Typed::Uint64(n) => n.size(),
-                Typed::Ipv4(a) => a.size(),
-                Typed::Ipv6(a) => a.size(),
-                Typed::String(s) => s.size(),
-                Typed::Binary(v) => v.size(),
-            }
-    }
+    pub const TYPE_SIZE: usize = 1;
 }
