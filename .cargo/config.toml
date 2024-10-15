@@ -1,5 +1,9 @@
 [build]
 rustflags = [
-    "--cfg", "tokio_unstable", 
-    "--cfg", "tracing_unstable",
+    "--cfg",
+    "tokio_unstable",
+    "--cfg",
+    "tracing_unstable",
+    "--cfg",
+    "reqwest_unstable",
 ]

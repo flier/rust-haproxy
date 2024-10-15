@@ -1,10 +1,10 @@
-use std::error::Error as StdError;
+use std::fmt;
 use std::sync::Arc;
 
 use derive_more::Debug;
 use tokio::time::timeout;
 use tower::{MakeService, Service};
-use tracing::info;
+use tracing::{info, instrument};
 
 use crate::{
     error::{Context, Result},
@@ -44,8 +44,9 @@ where
 impl<S, T> AsyncHandler<S, T> for Processing<S, T>
 where
     S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
-    S::Error: StdError + Send + Sync + 'static,
+    S::Error: fmt::Display + Send + Sync + 'static,
 {
+    #[instrument(skip(self), ret, err, level = "trace")]
     async fn handle_frame(mut self, frame: Frame) -> Result<(State<S, T>, Option<Frame>)> {
         match frame {
             Frame::HaproxyNotify(HaproxyNotify {
@@ -55,14 +56,11 @@ where
                 messages,
                 ..
             }) => {
-                let msgs = self
-                    .reassembly
-                    .as_ref()
-                    .map(|reassembly| {
-                        reassembly.reassemble(fragmented, stream_id, frame_id, messages)
-                    })
-                    .transpose()?
-                    .flatten();
+                let msgs = if let Some(ref reassembly) = self.reassembly {
+                    reassembly.reassemble(fragmented, stream_id, frame_id, messages)?
+                } else {
+                    Some(messages)
+                };
 
                 if let Some(msgs) = msgs {
                     match timeout(self.runtime.max_process_time, self.service.call(msgs)).await {

@@ -3,7 +3,6 @@ pub use haproxy_spop as spop;
 mod agent;
 mod conn;
 mod error;
-mod handle;
 pub mod req;
 pub mod runtime;
 mod state;

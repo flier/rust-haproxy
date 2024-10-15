@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use derive_more::Debug;
 use tower::MakeService;
+use tracing::instrument;
 
 use crate::{
     error::{Context as _, Result},
@@ -28,6 +29,7 @@ where
     S::MakeError: StdError + Send + Sync + 'static,
     T: Clone,
 {
+    #[instrument(skip(self), ret, err, level = "trace")]
     async fn handle_frame(self, frame: Frame) -> Result<(State<S, T>, Option<Frame>)> {
         if let Frame::HaproxyHello(hello) = frame {
             self.handshake(hello).await
@@ -57,20 +59,21 @@ where
         };
         let frame = handshaked.agent_hello().into();
 
-        if is_healthcheck {
-            Ok((State::Disconnecting, Some(frame)))
+        let next = if is_healthcheck {
+            State::Disconnecting
         } else {
             let service = runtime.service_maker.write().await.make().await?;
 
-            let next = Processing::new(
+            Processing::new(
                 runtime,
                 service,
                 handshaked
                     .supports_fragmentation()
                     .then(Reassembly::default),
-            );
+            )
+            .into()
+        };
 
-            Ok((next.into(), Some(frame)))
-        }
+        Ok((next, Some(frame)))
     }
 }

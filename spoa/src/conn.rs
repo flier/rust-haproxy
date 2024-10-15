@@ -53,7 +53,7 @@ where
     IO: AsyncRead + AsyncWrite + Unpin,
     S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
     S::MakeError: StdError + Send + Sync + 'static,
-    S::Error: StdError + Send + Sync + 'static,
+    S::Error: fmt::Display + Send + Sync + 'static,
     T: Clone,
 {
     pub async fn serve(&mut self) -> Result<()> {

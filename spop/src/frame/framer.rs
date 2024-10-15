@@ -1,6 +1,6 @@
-use std::mem;
+use std::{mem, pin::Pin};
 
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use futures::pin_mut;
 use hexplay::HexView;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -29,14 +29,9 @@ impl Framer {
 
         let len = r.read_u32().await.map_err(|_| Io)? as usize;
         if len <= self.max_frame_size {
-            let mut buf = {
-                let mut buf = BytesMut::with_capacity(self.max_frame_size);
-                buf.resize(len as usize, 0);
-                r.read_exact(&mut buf).await.map_err(|_| Io)?;
-                buf.freeze()
-            };
+            let mut buf = read_frame(r, self.max_frame_size, len).await?;
 
-            trace!(frame=%HexView::new(&buf));
+            trace!(buf=%HexView::new(&buf));
 
             buf.get_frame().map_err(|_| Invalid)
         } else {
@@ -48,18 +43,9 @@ impl Framer {
     where
         W: AsyncWrite + Sized,
     {
-        let buf = {
-            let mut buf = BytesMut::with_capacity(self.max_frame_size);
-            buf.put_u32(0);
-            buf.put_frame(frame);
+        let buf = write_frame(BytesMut::with_capacity(self.max_frame_size), frame);
 
-            let len = (buf.len() - mem::size_of::<u32>()) as u32;
-            (&mut buf[0..4]).put_u32(len);
-
-            buf.freeze()
-        };
-
-        trace!(frame=%HexView::new(&buf));
+        trace!(buf=%HexView::new(&buf[4..]));
 
         pin_mut!(w);
 
@@ -67,4 +53,27 @@ impl Framer {
 
         Ok(buf.len())
     }
+}
+
+async fn read_frame<R>(mut r: Pin<&mut R>, max_frame_size: usize, len: usize) -> Result<Bytes>
+where
+    R: AsyncRead + Sized,
+{
+    let mut buf = BytesMut::with_capacity(max_frame_size);
+    buf.resize(len, 0);
+
+    r.read_exact(&mut buf).await.map_err(|_| Io)?;
+
+    Ok(buf.freeze())
+}
+
+fn write_frame(mut buf: BytesMut, frame: Frame) -> Bytes {
+    buf.put_u32(0);
+    buf.put_frame(frame);
+
+    let len = (buf.len() - mem::size_of::<u32>()) as u32;
+
+    (&mut buf[0..4]).put_u32(len);
+
+    buf.freeze()
 }

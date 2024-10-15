@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, sync::Arc};
+use std::{error::Error as StdError, fmt, sync::Arc};
 
 use derive_more::{Debug, From};
 use tower::MakeService;
@@ -22,8 +22,11 @@ pub enum State<S, T>
 where
     S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
 {
+    #[debug("connecting")]
     Connecting(Connecting<S, T>),
+    #[debug("processing")]
     Processing(Processing<S, T>),
+    #[debug("disconnecting")]
     Disconnecting,
 }
 
@@ -40,7 +43,7 @@ impl<S, T> AsyncHandler<S, T> for State<S, T>
 where
     S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
     S::MakeError: StdError + Send + Sync + 'static,
-    S::Error: StdError + Send + Sync + 'static,
+    S::Error: fmt::Display + Send + Sync + 'static,
     T: Clone,
 {
     async fn handle_frame(self, frame: Frame) -> Result<(State<S, T>, Option<Frame>)> {

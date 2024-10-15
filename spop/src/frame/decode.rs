@@ -40,12 +40,10 @@ pub fn frame<B: Buf>(mut buf: B) -> Result<Frame> {
         frame::Type::AgentHello if md.stream_id == 0 && md.frame_id == 0 => {
             agent_hello(&mut buf).map(Frame::AgentHello)
         }
-        frame::Type::HaproxyNotify if md.stream_id != 0 && md.frame_id != 0 => {
+        frame::Type::HaproxyNotify if md.frame_id != 0 => {
             haproxy_notify(&mut buf, md).map(Frame::HaproxyNotify)
         }
-        frame::Type::AgentAck if md.stream_id != 0 && md.frame_id != 0 => {
-            agent_ack(&mut buf, md).map(Frame::AgentAck)
-        }
+        frame::Type::AgentAck if md.frame_id != 0 => agent_ack(&mut buf, md).map(Frame::AgentAck),
         frame::Type::HaproxyDisconnect if md.stream_id == 0 && md.frame_id == 0 => {
             disconnect(&mut buf).map(Frame::HaproxyDisconnect)
         }

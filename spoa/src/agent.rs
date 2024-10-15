@@ -1,4 +1,5 @@
 use std::error::Error as StdError;
+use std::fmt;
 use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
 
@@ -16,12 +17,6 @@ use crate::{
     spop::{Action, Error::*, Message},
     Connection, Runtime,
 };
-
-pub trait Handler: Service<Vec<Message>, Response = Vec<Action>> {}
-
-pub trait MakeHandler<T>: MakeService<T, Vec<Message>, Response = Vec<Action>> {}
-
-impl<S, T> MakeHandler<T> for S where S: MakeService<T, Vec<Message>, Response = Vec<Action>> {}
 
 #[derive(Debug)]
 pub struct Agent<S, T> {
@@ -41,8 +36,8 @@ impl<S, T> Agent<S, T> {
         })
     }
 
-    pub fn shutdown(&self) -> Shutdown {
-        self.shutdown.clone()
+    pub fn shutdown(&self) -> CancellationToken {
+        self.shutdown.token.clone()
     }
 }
 
@@ -52,12 +47,6 @@ pub struct Shutdown {
     token: CancellationToken,
 }
 
-impl Shutdown {
-    pub fn shutdown(self) {
-        self.token.cancel();
-    }
-}
-
 impl<S, T> Agent<S, T>
 where
     S: MakeService<T, Vec<Message>, Response = Vec<Action>> + Send + Sync + 'static,
@@ -65,7 +54,7 @@ where
     <S::Service as Service<Vec<Message>>>::Future: Send + 'static,
     S::MakeError: StdError + Send + Sync + 'static,
     S::Future: Send,
-    S::Error: StdError + Send + Sync + 'static,
+    S::Error: fmt::Display + Send + Sync + 'static,
     T: Clone + Send + Sync + 'static,
 {
     pub async fn serve(&self) -> Result<()> {
@@ -79,35 +68,36 @@ where
                     trace!(?peer, "accepted connection");
 
                     let conn = Connection::new(self.runtime.clone(), stream);
-                    let tok = self.shutdown.token.child_token();
+                    let closing = self.shutdown.token.child_token();
 
-                    tokio::task::Builder::new()
-                        .name("conn")
-                        .spawn(self.shutdown.tracker.track_future(async move {
-                            process(conn, tok).await
-                        }))?;
+                    tokio::spawn(self.shutdown.tracker.track_future(
+                        process(conn, closing)
+                    ));
                 }
             }
         }
 
-        self.shutdown.tracker.close();
-        self.shutdown.tracker.wait().await;
+        if self.shutdown.tracker.close() {
+            self.shutdown.tracker.wait().await;
+        }
 
         Ok(())
     }
 }
 
 #[instrument(skip_all, fields(?task = tokio::task::id()), err, level = "trace")]
-async fn process<IO, S, T>(mut conn: Connection<IO, S, T>, tok: CancellationToken) -> Result<()>
+async fn process<IO, S, T>(mut conn: Connection<IO, S, T>, closing: CancellationToken) -> Result<()>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
     S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
     S::MakeError: StdError + Send + Sync + 'static,
-    S::Error: StdError + Send + Sync + 'static,
+    S::Error: fmt::Display + Send + Sync + 'static,
     T: Clone,
 {
     select! {
-        _ = tok.cancelled() => {
+        _ = closing.cancelled() => {
+            trace!("closing");
+
             conn.disconnect(Normal, "shutting down").await
         }
         res = conn.serve() => {

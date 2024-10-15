@@ -24,7 +24,14 @@ daemonize.workspace = true
 http.workspace = true
 humantime.workspace = true
 net2.workspace = true
-reqwest.workspace = true
+rand.workspace = true
+reqwest = { workspace = true, features = [
+    "brotli",
+    "deflate",
+    "gzip",
+    "http3",
+    "zstd",
+] }
 rlimit.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
 tokio-util = { workspace = true, features = ["rt"] }

@@ -9,21 +9,25 @@ use core::str;
 use std::env;
 use std::fs::create_dir_all;
 use std::io;
+use std::net::IpAddr;
 use std::path::PathBuf;
-use std::result::Result as StdResult;
 use std::{convert::Infallible, fs::File};
 
-use anyhow::{Context, Result};
-use bytes::{Buf, Bytes};
+use anyhow::{bail, Context, Result};
+use bytes::Buf;
 use clap::Parser;
 use daemonize::Daemonize;
-use http::Request;
+use haproxy_spop::Scope;
 use humantime::Duration;
-use reqwest::Version;
+use rand::{thread_rng, Rng};
+use reqwest::{
+    header::HeaderMap, Body, Client, ClientBuilder, Method, RequestBuilder, Url, Version,
+};
 use rlimit::{getrlimit, setrlimit, Resource};
 use tokio::signal;
+use tokio::task::JoinSet;
 use tower::service_fn;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, trace};
 use tracing_subscriber::prelude::*;
 
 use haproxy::{
@@ -73,6 +77,10 @@ struct Opt {
     /// Change root directory
     #[arg(long)]
     chroot: Option<PathBuf>,
+
+    /// Specify the URL for the HTTP mirroring.
+    #[arg(short = 'u', long)]
+    mirror_url: String,
 }
 
 pub fn main() -> Result<()> {
@@ -90,10 +98,15 @@ pub fn main() -> Result<()> {
             .max_frame_size(opt.max_frame_size)
             .max_process_time(opt.processing_delay)
             .make_service(
-                service_fn(|_: ()| async {
-                    Ok::<_, Infallible>(service_fn(|msgs: Vec<Message>| process_request(msgs)))
+                service_fn(|(client, base): (Client, Url)| async move {
+                    Ok::<_, Infallible>(service_fn(move |msgs: Vec<Message>| {
+                        process_request(client.clone(), base.clone(), msgs)
+                    }))
                 }),
-                (),
+                (
+                    ClientBuilder::new().build()?,
+                    opt.mirror_url.parse::<Url>()?,
+                ),
             )
     };
     let listener = {
@@ -130,17 +143,15 @@ pub fn main() -> Result<()> {
 
     rt.block_on(async move {
         let agent = Agent::new(runtime, listener)?;
-        let shutdown = agent.shutdown();
+        let serve = agent.shutdown();
 
-        tokio::task::Builder::new()
-            .name("singal")
-            .spawn(async move {
-                signal::ctrl_c().await.unwrap();
+        tokio::spawn(async move {
+            signal::ctrl_c().await.unwrap();
 
-                debug!("received Ctrl+C");
+            debug!("received Ctrl+C");
 
-                shutdown.shutdown();
-            })?;
+            serve.cancel();
+        });
 
         agent.serve().await
     })?;
@@ -188,91 +199,166 @@ fn rlimit_setnofile() -> Result<()> {
     Ok(())
 }
 
-async fn process_request(msgs: Vec<Message>) -> StdResult<Vec<Action>, haproxy::agent::Error> {
-    for msg in msgs.into_iter().filter(|msg| msg.name == "mirror") {
-        for (arg, value) in msg.args {
-            let mut builder = Builder::new();
+#[instrument(skip(client), ret, err, level = "trace")]
+async fn process_request(client: Client, base: Url, msgs: Vec<Message>) -> Result<Vec<Action>> {
+    let mut actions = Vec::new();
+    let mut tasks = JoinSet::new();
 
-            match (arg.as_str(), value) {
-                ("arg_method", Typed::String(method)) => {
-                    builder.method(method);
-                }
-                ("arg_pathq", Typed::String(path)) => {
-                    builder.path(path);
-                }
-                ("arg_ver", Typed::String(version)) => {
-                    builder.version(version);
-                }
-                ("arg_hdrs", Typed::Binary(hdrs)) => {
-                    builder.headers(hdrs)?;
-                }
-                ("arg_body", Typed::Binary(body)) => {
-                    builder.body(body);
-                }
-                _ => debug!(%arg, "ignored"),
+    for msg in msgs {
+        match msg.name.as_str() {
+            "check-client-ip" => {
+                actions.push(iprep(msg)?);
             }
-
-            let req = builder.build()?;
+            "test" => {
+                debug!(%msg.name, ?msg.args);
+            }
+            "mirror" => {
+                mirror(&mut tasks, &client, &base, msg)?;
+            }
+            msg => debug!(msg, "ignored"),
         }
     }
 
-    Ok(vec![])
+    if !tasks.is_empty() {
+        actions.extend(tasks.join_all().await);
+    }
+
+    Ok(actions)
 }
 
-pub struct Builder {
-    req: Option<http::request::Builder>,
-    body: Option<Bytes>,
+fn iprep(msg: Message) -> Result<Action> {
+    let addr = msg
+        .args
+        .into_iter()
+        .find(|(name, _)| name == "ip")
+        .and_then(|(_, value)| match value {
+            Typed::Ipv4(addr) => Some(IpAddr::from(addr)),
+            Typed::Ipv6(addr) => Some(IpAddr::from(addr)),
+            _ => None,
+        });
+
+    if let Some(addr) = addr {
+        let score = thread_rng().gen_range(0..=100u32);
+
+        trace!(%addr, score, "IP reputation");
+
+        Ok(Action::set_var(Scope::Session, "ip_score", score))
+    } else {
+        bail!("missing `ip` argument");
+    }
 }
 
-impl Builder {
-    pub fn new() -> Builder {
-        Builder {
-            req: Some(http::request::Builder::new()),
+fn mirror(tasks: &mut JoinSet<Action>, client: &Client, base: &Url, msg: Message) -> Result<()> {
+    for (arg, value) in msg.args {
+        let mut builder = Builder::new(base.clone());
+
+        match (arg.as_str(), value) {
+            ("arg_method", Typed::String(method)) => {
+                builder.method(method);
+            }
+            ("arg_path", Typed::String(path)) => {
+                builder.path(path);
+            }
+            ("arg_query", Typed::String(query)) if !query.is_empty() => {
+                builder.query(query);
+            }
+            ("arg_ver", Typed::String(version)) => {
+                builder.version(version);
+            }
+            ("arg_hdrs", Typed::Binary(hdrs)) => {
+                builder.headers(hdrs);
+            }
+            ("arg_body", Typed::Binary(body)) if !body.is_empty() => {
+                builder.body(body);
+            }
+            _ => trace!(%arg, "ignored"),
+        }
+
+        let req = builder.build(client.clone());
+
+        tasks.build_task().name(&msg.name).spawn(async {
+            // let res = req.send().await?;
+
+            Action::set_var(Scope::Session, "foo", "bar")
+        })?;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+pub struct Builder<T> {
+    url: Url,
+    method: Option<Method>,
+    version: Option<Version>,
+    headers: HeaderMap,
+    body: Option<T>,
+}
+
+impl<T> Builder<T> {
+    pub fn new(base: Url) -> Self {
+        Self {
+            url: base,
+            method: None,
+            version: None,
+            headers: HeaderMap::new(),
             body: None,
         }
     }
 
     pub fn method<S: AsRef<str>>(&mut self, method: S) -> &mut Self {
-        self.req = self.req.take().map(|b| b.method(method.as_ref()));
+        self.method = method.as_ref().parse().ok();
         self
     }
 
     pub fn path<S: AsRef<str>>(&mut self, path: S) -> &mut Self {
-        self.req = self.req.take().map(|b| b.uri(path.as_ref()));
+        self.url.set_path(path.as_ref());
+        self
+    }
+
+    pub fn query<S: AsRef<str>>(&mut self, query: S) -> &mut Self {
+        self.url.set_query(Some(query.as_ref()));
         self
     }
 
     pub fn version<S: AsRef<str>>(&mut self, version: S) -> &mut Self {
-        self.req = self.req.take().map(|b| {
-            b.version(match version.as_ref() {
-                "1.0" => Version::HTTP_10,
-                "1.1" => Version::HTTP_11,
-                "2.0" => Version::HTTP_2,
-                "3.0" => Version::HTTP_3,
-                v => panic!("unexpected http version {v}"),
-            })
+        self.version = Some(match version.as_ref() {
+            "1.0" => Version::HTTP_10,
+            "1.1" => Version::HTTP_11,
+            "2.0" => Version::HTTP_2,
+            "3.0" => Version::HTTP_3,
+            v => panic!("unexpected http version {v}"),
         });
         self
     }
 
-    pub fn headers<T: Buf>(&mut self, b: T) -> StdResult<&mut Self, haproxy::agent::Error> {
-        if let Some(hdrs) = self.req.as_mut().and_then(|b| b.headers_mut()) {
-            hdrs.extend(req::hdrs_bin(b)?)
-        };
-
-        Ok(self)
-    }
-
-    pub fn body(&mut self, b: Bytes) -> &mut Self {
-        self.body = Some(b);
+    pub fn headers<B: Buf>(&mut self, b: B) -> &mut Self {
+        if let Some(hdrs) = req::hdrs_bin(b).ok() {
+            self.headers.extend(hdrs);
+        }
         self
     }
 
-    pub fn build(mut self) -> StdResult<Request<Bytes>, haproxy::agent::Error> {
-        Ok(self
-            .req
-            .take()
-            .expect("request builder")
-            .body(self.body.unwrap_or_default())?)
+    pub fn body(&mut self, b: T) -> &mut Self {
+        self.body = Some(b);
+        self
+    }
+}
+
+impl<T> Builder<T>
+where
+    T: Into<Body>,
+{
+    pub fn build(self, client: Client) -> RequestBuilder {
+        let mut builder = client
+            .request(self.method.unwrap_or(Method::GET), self.url)
+            .version(self.version.unwrap_or(Version::HTTP_11))
+            .headers(self.headers);
+
+        if let Some(body) = self.body {
+            builder = builder.body(body);
+        }
+
+        builder
     }
 }

@@ -1,12 +1,12 @@
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufStream};
+use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tracing::instrument;
 
 use crate::{
-    error::{Error::Io, Result},
+    error::Result,
     frame::{Frame, Framer},
 };
 
-pub type BufCodec<T> = Codec<BufStream<T>>;
+pub type BufCodec<T> = Codec<BufReader<T>>;
 
 impl<T> BufCodec<T>
 where
@@ -14,7 +14,7 @@ where
 {
     pub fn buffered(stream: T, framer: Framer) -> Self {
         Self {
-            stream: BufStream::new(stream),
+            stream: BufReader::new(stream),
             framer,
         }
     }
@@ -41,10 +41,6 @@ where
 
     #[instrument(skip(self), ret, err, level = "trace")]
     pub async fn write_frame(&mut self, frame: Frame) -> Result<usize> {
-        let sz = self.framer.write_frame(&mut self.stream, frame).await?;
-
-        self.stream.flush().await.map_err(|_| Io)?;
-
-        Ok(sz)
+        self.framer.write_frame(&mut self.stream, frame).await
     }
 }
