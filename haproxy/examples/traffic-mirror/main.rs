@@ -145,13 +145,15 @@ pub fn main() -> Result<()> {
         let agent = Agent::new(runtime, listener)?;
         let serve = agent.shutdown();
 
-        tokio::spawn(async move {
-            signal::ctrl_c().await.unwrap();
+        tokio::task::Builder::new()
+            .name("signal")
+            .spawn(async move {
+                signal::ctrl_c().await.unwrap();
 
-            debug!("received Ctrl+C");
+                debug!("received Ctrl+C");
 
-            serve.cancel();
-        });
+                serve.cancel();
+            })?;
 
         agent.serve().await
     })?;
@@ -276,7 +278,7 @@ fn mirror(tasks: &mut JoinSet<Action>, client: &Client, base: &Url, msg: Message
 
         let req = builder.build(client.clone());
 
-        tasks.build_task().name(&msg.name).spawn(async {
+        tasks.build_task().name("mirror").spawn(async {
             // let res = req.send().await?;
 
             Action::set_var(Scope::Session, "foo", "bar")

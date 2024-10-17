@@ -39,7 +39,7 @@ where
         self.framer.read_frame(&mut self.stream).await
     }
 
-    #[instrument(skip(self), ret, err, level = "trace")]
+    #[instrument(skip(self), err, level = "trace")]
     pub async fn write_frame(&mut self, frame: Frame) -> Result<usize> {
         self.framer.write_frame(&mut self.stream, frame).await
     }

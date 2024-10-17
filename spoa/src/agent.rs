@@ -64,44 +64,28 @@ where
                     debug!("shutting down");
                     break
                 }
+
                 Ok((stream, peer)) = self.listener.accept() => {
                     trace!(?peer, "accepted connection");
 
-                    let conn = Connection::new(self.runtime.clone(), stream);
-                    let closing = self.shutdown.token.child_token();
+                    let mut conn = Connection::new(self.runtime.clone(), stream, self.shutdown.token.child_token());
 
-                    tokio::spawn(self.shutdown.tracker.track_future(
-                        process(conn, closing)
-                    ));
+                    tokio::task::Builder::new().name("conn").spawn(self.shutdown.tracker.track_future(async move {
+                        conn.serve().await
+                    }))?;
                 }
             }
         }
 
-        if self.shutdown.tracker.close() {
+        if self.shutdown.tracker.close() && !self.shutdown.tracker.is_empty() {
+            debug!(
+                conns = self.shutdown.tracker.len(),
+                "waiting for shutting down"
+            );
+
             self.shutdown.tracker.wait().await;
         }
 
         Ok(())
-    }
-}
-
-#[instrument(skip_all, fields(?task = tokio::task::id()), err, level = "trace")]
-async fn process<IO, S, T>(mut conn: Connection<IO, S, T>, closing: CancellationToken) -> Result<()>
-where
-    IO: AsyncRead + AsyncWrite + Unpin,
-    S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
-    S::MakeError: StdError + Send + Sync + 'static,
-    S::Error: fmt::Display + Send + Sync + 'static,
-    T: Clone,
-{
-    select! {
-        _ = closing.cancelled() => {
-            trace!("closing");
-
-            conn.disconnect(Normal, "shutting down").await
-        }
-        res = conn.serve() => {
-            res
-        }
     }
 }

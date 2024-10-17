@@ -4,7 +4,7 @@ use std::sync::Arc;
 use derive_more::Debug;
 use tokio::time::timeout;
 use tower::{MakeService, Service};
-use tracing::{info, instrument};
+use tracing::{instrument, trace};
 
 use crate::{
     error::{Context, Result},
@@ -82,7 +82,7 @@ where
                 status_code,
                 message,
             }) => {
-                info!(?status_code, ?message, "disconnecting");
+                trace!(?status_code, ?message, "disconnecting");
 
                 Err(Normal).context("peer closed connection")
             }

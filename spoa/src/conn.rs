@@ -3,7 +3,11 @@ use std::fmt;
 use std::mem;
 use std::sync::Arc;
 
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    select,
+};
+use tokio_util::sync::CancellationToken;
 use tower::MakeService;
 use tracing::instrument;
 
@@ -22,6 +26,7 @@ where
 {
     codec: BufCodec<IO>,
     state: State<S, T>,
+    tok: CancellationToken,
 }
 
 impl<IO, S, T> Connection<IO, S, T>
@@ -29,12 +34,12 @@ where
     IO: AsyncRead + AsyncWrite + Unpin,
     S: MakeService<T, Vec<Message>, Response = Vec<Action>>,
 {
-    pub fn new(runtime: Arc<Runtime<S, T>>, io: IO) -> Self {
+    pub fn new(runtime: Arc<Runtime<S, T>>, io: IO, tok: CancellationToken) -> Self {
         let framer = Framer::new(runtime.max_frame_size);
         let codec = Codec::buffered(io, framer);
         let state = State::new(runtime);
 
-        Connection { codec, state }
+        Connection { codec, state, tok }
     }
 
     #[instrument(skip(self), err, level = "trace")]
@@ -59,19 +64,30 @@ where
     pub async fn serve(&mut self) -> Result<()> {
         loop {
             let state = mem::replace(&mut self.state, State::Disconnecting);
-            let frame = self.codec.read_frame().await?;
+            if matches!(state, State::Disconnecting) {
+                break;
+            }
 
-            match state.handle_frame(frame).await {
-                Ok((next, reply)) => {
-                    if let Some(frame) = reply {
-                        self.codec.write_frame(frame).await?;
-                    }
-                    self.state = next;
-                }
-                Err(err) => {
-                    let frame = Frame::AgentDisconnect(err.into());
-                    self.codec.write_frame(frame).await?;
+            select! {
+                _ = self.tok.cancelled() => {
                     break;
+                }
+
+                frame = self.codec.read_frame() => {
+                    match state.handle_frame(frame?).await {
+                        Ok((next, reply)) => {
+                            if let Some(frame) = reply {
+                                self.codec.write_frame(frame).await?;
+                            }
+                            self.state = next;
+                        }
+                        Err(err) => {
+                            let frame = Frame::AgentDisconnect(err.into());
+                            self.codec.write_frame(frame).await?;
+                            self.tok.cancel();
+                            break;
+                        }
+                    }
                 }
             }
         }
